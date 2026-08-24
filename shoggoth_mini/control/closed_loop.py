@@ -1,5 +1,6 @@
 """Closed-loop control system combining vision and motor control."""
 
+import csv
 import logging
 import time
 from pathlib import Path
@@ -24,6 +25,8 @@ from ..perception.stereo import (
 
 from ..hardware.motors import MotorController
 from ..common.constants import MOTOR_NAMES
+from ..perception.camera import read_oriented
+from ..perception.velocity_gate import VelocityGate
 
 from .geometry import cursor_to_motor_positions
 
@@ -169,6 +172,12 @@ class PerceptionSystem:
             external_camera: External camera object to use instead of creating new one
         """
         self.config = perception_config
+        # Per-eye detection status and the frame it came from. triangulate_points()
+        # returns None when EITHER eye is missing, so a single "finger lost" flag
+        # hides the difference between "detector found nothing" and "found it in one
+        # eye only" (occlusion / outside the stereo overlap) — different causes.
+        self.last_flags = {}
+        self.last_frame = None
         self.cap = external_camera
         self.owns_camera = external_camera is None
         self.executor = None
@@ -192,6 +201,20 @@ class PerceptionSystem:
         self.stereo_calib = load_stereo_calibration(
             calib_dir=self.config.camera_calibration_path
         )
+        # One gate per tracked point. Applied AFTER triangulation, so the limit is
+        # expressed in real metres per second rather than pixels.
+        gate_on = getattr(perception_config, "velocity_gate_enabled", False)
+        self.tip_gate = (
+            VelocityGate(perception_config.tip_max_speed_m_s,
+                         perception_config.velocity_gate_max_rejects, name="tip")
+            if gate_on else None
+        )
+        self.target_gate = (
+            VelocityGate(perception_config.target_max_speed_m_s,
+                         perception_config.velocity_gate_max_rejects, name="target")
+            if gate_on else None
+        )
+
         self.detector = YOLODetector(
             model_path=str(self.config.yolo_model_path),
             device=self.config.yolo_device,
@@ -212,7 +235,7 @@ class PerceptionSystem:
         if not self.cap:
             return None, None
 
-        ok, frame = self.cap.read()
+        ok, frame = read_oriented(self.cap)
         if not ok:
             return None, None
 
@@ -240,6 +263,14 @@ class PerceptionSystem:
             xy_l_finger, _ = get_mediapipe_hand_data(left_frame)
             xy_r_finger, _ = get_mediapipe_hand_data(right_frame)
 
+        self.last_frame = frame
+        self.last_flags = {
+            "tip_l": xy_l_tip is not None,
+            "tip_r": xy_r_tip is not None,
+            "fing_l": xy_l_finger is not None,
+            "fing_r": xy_r_finger is not None,
+        }
+
         # Triangulate 3D positions
         tip_pos = triangulate_points(
             xy_l_tip,
@@ -261,7 +292,18 @@ class PerceptionSystem:
             coordinate_limits=self.config.coordinate_limits,
         )
 
+        if self.tip_gate is not None:
+            tip_pos = self.tip_gate.update(tip_pos)
+            self.last_flags["tip_gated"] = self.tip_gate.last_was_rejected
+        if self.target_gate is not None:
+            finger_pos = self.target_gate.update(finger_pos)
+            self.last_flags["target_gated"] = self.target_gate.last_was_rejected
+
         return tip_pos, finger_pos
+
+    def gate_stats(self):
+        """Gate counters for the end-of-run summary, or None when disabled."""
+        return [g.stats for g in (self.tip_gate, self.target_gate) if g is not None]
 
     def cleanup(self):
         """Clean up resources."""
@@ -577,6 +619,10 @@ class ClosedLoopController:
 
         # Control state
         self.running = False
+        self.telemetry = None
+        self.dump_dir = None
+        self._dump_count = 0
+        self._last_dump_t = 0.0
         self.home_positions_ticks = None
         self.lost_counter = 0
 
@@ -609,6 +655,40 @@ class ClosedLoopController:
         self.motor_system.current_positions_ticks = self.motor_system.run_calibration()
         console.print("[green]✓[/green] Calibration complete")
 
+    def _maybe_dump_miss(self):
+        """Save the frame behind a detection failure, so you can see WHY.
+
+        A boolean "not detected" tells you nothing about the cause. The image
+        shows whether the hand was occluded by the tentacle, out of one eye's
+        view, motion-blurred, or simply not where you thought it was.
+
+        Rate-limited to at most one per second: at 14 Hz a bad patch would
+        otherwise write hundreds of near-identical 3840x1080 frames.
+        """
+        if not self.dump_dir:
+            return
+        now = time.time()
+        if now - self._last_dump_t < 1.0:
+            return
+        frame = getattr(self.perception_system, "last_frame", None)
+        if frame is None:
+            return
+
+        flags = self.perception_system.last_flags or {}
+        # Encode which eyes saw what into the filename — makes the directory
+        # listing itself the summary.
+        tag = "".join(
+            k.replace("fing", "f").replace("tip", "t").replace("_", "")
+            for k, v in flags.items() if v
+        ) or "none"
+        path = self.dump_dir / f"miss_{self._dump_count:04d}_{tag}.jpg"
+        try:
+            cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            self._dump_count += 1
+            self._last_dump_t = now
+        except Exception as e:
+            logger.warning("Could not write miss frame: %s", e)
+
     def run_control_loop(self):
         """Run the main control loop."""
         step_time = 1.0 / self.hardware_config.control_loop_hz
@@ -626,6 +706,13 @@ class ClosedLoopController:
 
             if tip_pos is None or finger_pos is None:
                 self.lost_counter += 1
+                if self.telemetry:
+                    # Log WHICH of the two was missing — "lost the tip" and "lost
+                    # the finger" have completely different causes.
+                    self.telemetry.log(False, tip_pos, finger_pos, None, None,
+                                       self.lost_counter,
+                                       self.perception_system.last_flags)
+                    self._maybe_dump_miss()
                 if (
                     self.home_positions_ticks
                     and self.lost_counter >= lost_frames_threshold
@@ -669,6 +756,13 @@ class ClosedLoopController:
 
             # Execute action
             self.motor_system.execute_action(action_2d_cursor)
+
+            if self.telemetry:
+                self.telemetry.log(
+                    True, tip_m, target_m, action_2d_cursor,
+                    self.motor_system.current_positions_ticks, 0,
+                    self.perception_system.last_flags,
+                )
 
             # Sleep to maintain loop timing
             elapsed = time.time() - t_loop_start
@@ -720,6 +814,76 @@ class ClosedLoopController:
         self.stop()
 
 
+class LoopTelemetry:
+    """Per-iteration CSV log of the whole closed-loop chain.
+
+    Exists because you cannot run debug-perception alongside the controller — the
+    camera is exclusive to one process — so the only way to see what the loop is
+    reacting to is to log it from inside. Captures the full chain per iteration:
+    what was detected, what the policy asked for, and what the motors were told.
+
+    Diagnosing jerk from this: if tip/target jump frame to frame, the input is
+    noisy (detector). If they are smooth but action_x/action_y oscillate, the
+    policy is reacting badly (try action_smoothing_alpha). If both are smooth but
+    the ticks jump, it is the geometry conversion or a rate limit.
+    """
+
+    FIELDS = [
+        "t", "dt", "detected",
+        "tip_x", "tip_y", "tip_z",
+        "target_x", "target_y", "target_z",
+        "action_x", "action_y",
+        "ticks_1", "ticks_2", "ticks_3",
+        "lost_counter",
+        "tip_l", "tip_r", "fing_l", "fing_r",
+        "tip_gated", "target_gated",
+    ]
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = open(self.path, "w", newline="")
+        self._w = csv.writer(self._fh)
+        self._w.writerow(self.FIELDS)
+        self._t0 = time.time()
+        self._t_prev = self._t0
+        self.rows = 0
+
+    @staticmethod
+    def _vec3(v):
+        return ["", "", ""] if v is None else [f"{float(x):.5f}" for x in v[:3]]
+
+    def log(self, detected, tip, target, action, ticks, lost_counter, flags=None):
+        now = time.time()
+        row = [f"{now - self._t0:.4f}", f"{now - self._t_prev:.4f}", int(bool(detected))]
+        row += self._vec3(tip)
+        row += self._vec3(target)
+        row += ["", ""] if action is None else [f"{float(action[0]):.5f}",
+                                                f"{float(action[1]):.5f}"]
+        row += ["", "", ""] if ticks is None else [str(int(ticks.get(m, 0)))
+                                                   for m in ("1", "2", "3")]
+        row.append(lost_counter)
+        flags = flags or {}
+        row += [int(bool(flags.get(k))) if k in flags else ""
+                for k in ("tip_l", "tip_r", "fing_l", "fing_r",
+                          "tip_gated", "target_gated")]
+        self._w.writerow(row)
+        self._t_prev = now
+        self.rows += 1
+        # Flush aggressively: tools/plot_loop_live.py tails this file while the
+        # loop runs, and buffering 50 rows at ~16 Hz would put it 3 s behind.
+        # A few hundred bytes per iteration is not a measurable cost.
+        if self.rows % 3 == 0:
+            self._fh.flush()
+
+    def close(self):
+        try:
+            self._fh.flush()
+            self._fh.close()
+        except Exception:
+            pass
+
+
 @app.command()
 def run(
     control_config: Optional[str] = typer.Option(
@@ -730,6 +894,18 @@ def run(
     ),
     hardware_config_path: Optional[str] = typer.Option(
         None, "--hardware-config", "-h", help="Path to hardware configuration file"
+    ),
+    dump_misses: Optional[str] = typer.Option(
+        None, "--dump-misses",
+        help="Directory to save stereo frames when a detection fails (max 1/sec). "
+             "Filenames encode which eyes saw what, e.g. miss_0003_tl_tr_fl.jpg "
+             "means the finger was found in the LEFT eye only.",
+    ),
+    log_csv: Optional[str] = typer.Option(
+        None, "--log-csv",
+        help="Write per-iteration telemetry (detections, policy action, motor ticks) "
+             "to this CSV. debug-perception cannot run alongside the controller "
+             "(the camera is exclusive), so this is the way to see what the loop saw.",
     ),
 ) -> None:
     """Run closed-loop RL control with tentacle robot."""
@@ -750,7 +926,32 @@ def run(
         perception_config=perception_config,
         hardware_config=hardware_config,
     ) as controller:
-        controller.start()
+        if log_csv:
+            controller.telemetry = LoopTelemetry(log_csv)
+            console.print(f"Telemetry: [cyan]{log_csv}[/cyan]")
+        if dump_misses:
+            controller.dump_dir = Path(dump_misses)
+            controller.dump_dir.mkdir(parents=True, exist_ok=True)
+            console.print(f"Miss frames: [cyan]{dump_misses}[/cyan]")
+        try:
+            controller.start()
+        finally:
+            try:
+                stats = controller.perception_system.gate_stats()
+                for st in stats or []:
+                    console.print(
+                        f"velocity gate [{st['name']}]: accepted {st['accepted']}, "
+                        f"rejected {st['rejected']} ({100*st['reject_rate']:.1f}%), "
+                        f"force-accepted {st['forced']}"
+                    )
+            except Exception:
+                pass
+            if controller.telemetry:
+                controller.telemetry.close()
+                console.print(
+                    f"[green]wrote {controller.telemetry.rows} rows to "
+                    f"{log_csv}[/green]"
+                )
 
 
 def main() -> None:
