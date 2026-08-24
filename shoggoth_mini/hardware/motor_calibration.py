@@ -56,6 +56,15 @@ class TentacleCalibrator:
             try:
                 self.motor_controller._motor_bus.write("Mode", WHEEL_MODE, motor_name)
                 self.motor_controller._motor_bus.write("Goal_Speed", 0, motor_name)
+                # ONLY EDIT TO THIS FILE. Writing Mode CLEARS Torque_Enable on these
+                # servos (firmware interlock, confirmed 2026-08-12), and nothing in
+                # the codebase ever sets torque. Without this line the servo accepts
+                # Goal_Speed and applies no current: the arrow keys register, the
+                # tool prints "Turning 1", and the motors sit silent with no error
+                # anywhere. Torque goes on AFTER the Mode write (the interlock would
+                # eat it otherwise) and after Goal_Speed is zeroed, so enabling it
+                # cannot lurch the tendons.
+                self.motor_controller._motor_bus.write("Torque_Enable", 1, motor_name)
             except Exception as e:
                 console.print(
                     f"[red]Warning: Could not set {motor_name} to wheel mode: {e}[/red]"

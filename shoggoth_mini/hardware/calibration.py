@@ -138,8 +138,21 @@ def validate_calibration(calibrated_ticks_map: Dict[str, int]) -> bool:
                 "Motor %s calibration is not an integer: %s", motor_name, ticks
             )
             return False
-        if ticks < MOTOR_POSITION_MIN or ticks > MOTOR_POSITION_MAX:
-            logger.warning("Motor %s calibration out of range: %d", motor_name, ticks)
+        # Range is the PHYSICAL encoder range, not the raw 16-bit register range.
+        # This previously checked MOTOR_POSITION_MIN/MAX (+/-32768), which accepted
+        # a saved calibration of -1548 on motor 2 (2026-08-18). Every cursor target
+        # derived from it was then a negative absolute position, which geometry.py
+        # correctly encodes as sign-magnitude and the servo correctly obeys — so a
+        # 0.18-magnitude sweep commanded a 4234-tick move to -2186 with the tendons
+        # threaded. Nothing downstream can tell a poisoned zero from a good one.
+        if not (0 <= ticks < MOTOR_ONE_FULL_TURN_TICKS):
+            logger.warning(
+                "Motor %s calibration %d is outside the encoder range 0..%d. "
+                "Targets derived from it will be unreachable positions.",
+                motor_name,
+                ticks,
+                MOTOR_ONE_FULL_TURN_TICKS - 1,
+            )
             return False
 
     return True
