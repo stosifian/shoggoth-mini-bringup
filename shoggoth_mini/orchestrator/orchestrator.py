@@ -6,7 +6,6 @@ import base64
 import time
 from typing import Optional, Dict
 import cv2
-import mediapipe as mp
 import collections as py_collections
 import sounddevice as sd
 import websockets
@@ -26,6 +25,7 @@ from ..perception.hand_tracking import (
     update_landmark_trail,
     is_wave_gesture,
     close_mediapipe_hands,
+    INDEX_FINGER_MCP,
 )
 from ..perception.stereo import (
     triangulate_points,
@@ -34,6 +34,7 @@ from ..perception.stereo import (
     split_stereo_frame,
 )
 from ..control.closed_loop import ClosedLoopController
+from ..perception.camera import read_oriented
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -146,13 +147,31 @@ class OrchestratorApp:
         self.is_visual_worker_running.clear()
 
         # Stop idle motion
-        await self._stop_idle_motion(reset_to_calibrated=True)
+        await self._stop_idle_motion(reset_to_calibrated=False)
+
+        # Stop the finger-follow controller BEFORE the bus is closed. Previously
+        # this ran after disconnect(), so quitting mid-follow left the controller
+        # shutting down against an already-closed port.
+        await self._stop_finger_follow()
 
         # Cancel pending tasks
         if self.idle_start_task and not self.idle_start_task.done():
             self.idle_start_task.cancel()
 
         self.is_grabbing.clear()
+
+        # Return to neutral UNCONDITIONALLY. This used to happen only via the idle
+        # path, so whether the tentacle came home depended on which state happened
+        # to be active at Ctrl+C — idle running meant a reset, a just-finished
+        # primitive meant none, and the servos held their last pose because torque
+        # stays enabled through disconnect(). Ramped, so it is a smooth return.
+        if self.motor_controller:
+            try:
+                await asyncio.to_thread(
+                    self.motor_controller.reset_to_calibrated_positions
+                )
+            except Exception as e:
+                logger.warning("Could not return to neutral on shutdown: %s", e)
 
         # Disconnect motor controller
         if self.motor_controller:
@@ -162,9 +181,6 @@ class OrchestratorApp:
         close_mediapipe_hands()
 
         self.is_recording.clear()
-
-        # Stop finger-follow controller if running
-        await self._stop_finger_follow()
 
         logger.info("Cleanup complete.")
 
@@ -208,9 +224,9 @@ class OrchestratorApp:
                 await self._handle_speech_stopped()
             elif event_type == "input_audio_buffer.committed":
                 await self._handle_audio_committed()
-            elif event_type == "response.text.delta":
+            elif event_type == "response.output_text.delta":
                 self._handle_text_output(data.get("delta", ""), end="")
-            elif event_type == "response.text.done":
+            elif event_type == "response.output_text.done":
                 self._handle_text_output(" ← [text complete]", end="\n")
             elif event_type == "response.created":
                 logger.debug("Response creation started")
@@ -252,20 +268,12 @@ class OrchestratorApp:
         logger.info("Session created. Updating session...")
         update = {
             "type": "session.update",
-            "session": {
-                "instructions": self.config.system_prompt,
-                "tools": self.config.get_tools_definition(),
-                "turn_detection": {
-                    "type": "server_vad",
-                    "interrupt_response": False,
-                    "create_response": False,
-                },
-            },
+            "session": self.config.get_session_config(),
         }
         await self._send_websocket_message(update)
 
-        # Send greeting
-        greeting = {"type": "response.create", "response": {"modalities": ["text"]}}
+        # Send greeting (output modality is set on the session -> text)
+        greeting = {"type": "response.create"}
         await self._send_websocket_message(greeting)
 
         # Start idle motion
@@ -294,7 +302,7 @@ class OrchestratorApp:
             self.idle_start_task.cancel()
             logger.info("Cancelled pending idle start due to audio commit.")
 
-        request = {"type": "response.create", "response": {"modalities": ["text"]}}
+        request = {"type": "response.create"}
         logger.info("Sending response.create request to OpenAI...")
         await self._send_websocket_message(request)
         logger.info("Response request sent successfully")
@@ -417,7 +425,7 @@ class OrchestratorApp:
         await self._send_function_result(call_id, result)
 
         # Request follow-up response
-        request = {"type": "response.create", "response": {"modalities": ["text"]}}
+        request = {"type": "response.create"}
         await self._send_websocket_message(request)
 
         # Schedule idle restart only for actions that should return to neutral
@@ -583,11 +591,11 @@ class OrchestratorApp:
             last_hand_seen_time_wave = None
             HAND_ABSENCE_TIMEOUT_WAVE = 1.0
             last_near_sent_time = 0.0
-            LANDMARK_FOR_WAVE = mp.solutions.hands.HandLandmark.INDEX_FINGER_MCP
+            LANDMARK_FOR_WAVE = INDEX_FINGER_MCP
 
             # Main processing loop
             while self.is_visual_worker_running.is_set():
-                ok_stereo, frame_stereo_full = cap_stereo.read()
+                ok_stereo, frame_stereo_full = read_oriented(cap_stereo)
                 if not ok_stereo or frame_stereo_full is None:
                     await asyncio.sleep(0.1)
                     continue
@@ -705,11 +713,8 @@ class OrchestratorApp:
                 }
                 await self.websocket.send(json.dumps(message))
 
-                # Request response
-                response_request = {
-                    "type": "response.create",
-                    "response": {"modalities": ["text"]},
-                }
+                # Request response (output modality set on the session -> text)
+                response_request = {"type": "response.create"}
                 await self.websocket.send(json.dumps(response_request))
             except Exception as e:
                 logger.error(f"Error sending visual input: {e}")

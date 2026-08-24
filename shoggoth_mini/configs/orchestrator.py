@@ -17,15 +17,14 @@ class OrchestratorConfig(BaseConfig):
         description="OpenAI API key for Realtime API access (loads from OPENAI_API_KEY env var)",
     )
     websocket_url: str = Field(
-        default="wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
-        description="WebSocket URL for OpenAI Realtime API",
+        default="wss://api.openai.com/v1/realtime?model=gpt-realtime",
+        description="WebSocket URL for OpenAI Realtime API (GA)",
     )
     websocket_headers: list[str] = Field(
         default_factory=lambda: [
             "Authorization: Bearer YOUR_API_KEY_HERE",
-            "OpenAI-Beta: realtime=v1",
         ],
-        description="WebSocket headers for OpenAI Realtime API connection",
+        description="WebSocket headers for OpenAI Realtime API connection (GA: no OpenAI-Beta header)",
     )
 
     # Audio Configuration
@@ -65,11 +64,38 @@ class OrchestratorConfig(BaseConfig):
     )
 
     def get_websocket_headers(self) -> list[str]:
-        """Get WebSocket headers with proper API key integration."""
+        """Get WebSocket headers with proper API key integration.
+
+        GA Realtime API: only Bearer auth; the beta `OpenAI-Beta: realtime=v1`
+        header was removed when the beta interface was retired (2026-05-12).
+        """
         return [
             f"Authorization: Bearer {self.openai_api_key}",
-            "OpenAI-Beta: realtime=v1",
         ]
+
+    def get_session_config(self) -> dict:
+        """Build the GA `session.update` `session` object.
+
+        GA schema differs from the old beta: a required `type: "realtime"`,
+        `output_modalities` (was `modalities`), and turn detection nested under
+        `audio.input.turn_detection` (was top-level `turn_detection`). This
+        assistant is voice-in / text+action-out, so output is text only.
+        """
+        return {
+            "type": "realtime",
+            "output_modalities": ["text"],
+            "instructions": self.system_prompt,
+            "tools": self.get_tools_definition(),
+            "audio": {
+                "input": {
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "interrupt_response": False,
+                        "create_response": False,
+                    },
+                },
+            },
+        }
 
     def get_tools_definition(self) -> list:
         """Get tool definitions for OpenAI function calling."""
