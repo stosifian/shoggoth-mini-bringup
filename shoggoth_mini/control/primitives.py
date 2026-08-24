@@ -89,7 +89,59 @@ class GrabMotionConfig:
     """Configuration for grab/release motions - handcrafted positions."""
 
     grab_cursor_pos: np.ndarray = field(
-        default_factory=lambda: MOTOR_NORMALIZED_POSITIONS["2"] * 0.7
+        # Upstream ships 0.7. This is 0.41 — see the sizing note below.
+        #
+        # HISTORY, because the stated reason for the first change was wrong:
+        # it was reduced to 0.25 on 2026-08-14 with the explanation that these
+        # servos take a modulo-4096 SHORTEST PATH, so a command over 2048 ticks
+        # executes backwards. THAT EXPLANATION WAS WRONG. Test C swept +/-50 to
+        # +/-2000 and test D/E ran 0 to 4150: no reversal anywhere, and no special
+        # behaviour at 2048. The probe that "confirmed" it (modular_path_probe.py,
+        # 11/11) was run against a calibration whose motor-2 zero was -1548, so
+        # every one of its targets was a negative absolute position and it was
+        # measuring the sign-magnitude encoding, not a shortest-path rule. Treat
+        # that probe's results as void.
+        #
+        # What is actually true of 0.7, and is reason enough for caution: it is a
+        # single UNRAMPED command of +2867 ticks on motor 2 — 77 mm of cable in
+        # one move at roughly 200 mm/s — while motors 1 and 3 each pay out 38.5 mm
+        # simultaneously. From a 2048 zero it targets 4915, outside 0..4095. Paying
+        # cable out fast with no tension on it is what strips wire off the rollers.
+        #
+        # SET TO 0.41 (2026-08-18). Sized for RETENSION HEADROOM, not for depth.
+        #
+        # Grab winds motor 2 in further than any other motion, so it is the first
+        # thing to run out of range when the calibrated zero moves — and the zero
+        # only ever moves UP, because retension is always wind-in to take up slack.
+        # Measured with tools/char_primitive_sweep.py --calib-offset:
+        #
+        #   magnitude 0.48, zero +0   -> target 4014   ok, 81 ticks spare
+        #   magnitude 0.48, zero +100 -> target 4114   REFUSED, over by 19
+        #   magnitude 0.48, zero +300 -> target 4314   REFUSED, over by 219
+        #   magnitude 0.41, zero +300 -> target 4027   ok
+        #
+        # 0.48 was the largest value fitting inside 4095 with the ~36-tick
+        # overshoot from test C, and that is exactly why it was wrong: it spent
+        # the entire budget on grab depth and left none for the zero to move.
+        # 0.41 reserves ~300 ticks (8 mm of cable) of retension freedom, at a cost
+        # of about 3.5 mm of grab depth. The two are directly exchangeable:
+        # max magnitude = (4095 - 36 - zero - retension_budget) / 4096.
+        #
+        # For reference on the boundary itself:
+        #   0.50 -> target 4095, overshoots to ~4131   CROSSES THE FOLD
+        #   0.70 -> target 4915 (upstream value)       far past it
+        #
+        # Crossing the fold is the actual failure mode, measured 2026-08-18.
+        # Past 4095 the reading comes back negative, and every read-modify-write
+        # path in the stack (idle's position tracking, closed_loop's read-back,
+        # any homing ramp) then computes a negative Goal_Position. A raw negative
+        # is decoded SIGN-MAGNITUDE, so -3217 becomes a target of -29551 and the
+        # motor runs away at full speed until it jams. That is what tore tendon 2
+        # off its roller, not any shortest-path rule.
+        #
+        # Raising this further requires fold-safe position tracking everywhere,
+        # not just a bigger number here.
+        default_factory=lambda: MOTOR_NORMALIZED_POSITIONS["2"] * 0.41
     )
     hold_duration: float = 0.3
 
