@@ -7,15 +7,50 @@ perception:
 
   # Camera parameters
   camera_index: 0
-  stereo_resolution: [3840, 1520]
+  stereo_resolution: [3840, 1080]
+
+  # Camera board is mounted INVERTED (rotated 180) for USB connector clearance.
+  # This is not cosmetic: a 180 rotation swaps which half of the side-by-side frame
+  # belongs to which physical camera, so without it split_stereo_frame() assigns
+  # left/right backwards and triangulation is silently wrong. Applied at capture,
+  # before any splitting, identically in calibration / training / runtime.
+  camera_rotate_180: true
+
+  # Velocity gate: reject detections implying impossible speed. Chosen by
+  # replaying recorded loop telemetry offline (2026-08-12), not guessed: 0.75
+  # removed 100% of >50 mm tip jumps for 12% of detections, and >=2.0 m/s did
+  # nothing. A rejected point returns None, so the control loop simply
+  # skips that iteration; it is NEVER replaced with a stale position, which the
+  # policy could not distinguish from a fresh one.
+  velocity_gate_enabled: true
+  tip_max_speed_m_s: 0.75        # removes 100% of >50mm jumps, costs 12% of detections
+  target_max_speed_m_s: 0.75     # removes 93%, costs 2.4%  (>=2.0 does nothing)
+  velocity_gate_max_rejects: 3   # force-accept after N rejects, else a bad
+                                 # reference locks out detection forever
 
   # Detection parameters
-  confidence_threshold: 0.3
+  # Lowered from the upstream 0.3 after measuring per-eye detection rates
+  # (2026-08-12). Triangulation needs the tip in BOTH eyes, and the eyes fail
+  # independently, so the 3D rate is roughly the PRODUCT of the two per-eye
+  # rates — 0.3 gave L 60.7% / R 70.6% -> 3D 48.5%. At 0.15: L 86.9% / R 83.5%
+  # -> 3D 77.4%, with the >50mm outlier rate unchanged (20.5% -> 19.5%), so the
+  # extra detections are genuine, not false positives.
+  confidence_threshold: 0.15
   yolo_device: "cpu"
 
   # Coordinate transformation parameters
-  units_to_meters: 0.05
-  rotation_angle_deg: 35
+  # 1.0 because tools/stereo_calibrate.py builds object points in METRES
+  # (square_mm / 1000), so triangulation is already metric — verified 2026-08-11:
+  # reconstructed square 16.02 mm vs 16.00 mm input (+0.1%).
+  # The upstream default 0.05 is DeepLabCut's convention, where the solve is in
+  # checkerboard-square units and 0.05 encodes the author's 50 mm squares.
+  units_to_meters: 1.0
+  # Measured 2026-08-11 with tools/fit_camera_tilt.py against a plumb checkerboard:
+  # 20 detections, 0.41 mm planarity, 0.04 deg frame-to-frame spread,
+  # up vector [-0.0036 +0.7714 -0.6364], residual tilt 0.21 deg (camera has
+  # essentially no roll, so rotation-about-X is sufficient for this mount).
+  # Upstream's 35 was the author's camera pose — not a constant.
+  rotation_angle_deg: 39.52
   y_translation_m: -0.03
 
   # Coordinate limits for triangulated points

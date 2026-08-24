@@ -14,6 +14,7 @@ from ..configs.loaders import get_perception_config
 from .detection import YOLODetector
 from .hand_tracking import get_mediapipe_hand_data, close_mediapipe_hands
 from .stereo import load_stereo_calibration, triangulate_points, split_stereo_frame
+from .camera import read_oriented
 from .dashboard import (
     setup_dashboard_figure,
     draw_detection_overlays,
@@ -114,7 +115,7 @@ def debug_perception_impl(
             loop_start = time.time()
 
             # Capture frame
-            ret, frame = cap.read()
+            ret, frame = read_oriented(cap)
             if not ret:
                 console.print("Failed to capture frame")
                 break

@@ -28,6 +28,46 @@ class PerceptionConfig(BaseConfig):
         default=(3840, 1520), description="Stereo camera resolution (width, height)"
     )
 
+    camera_rotate_180: bool = Field(
+        default=False,
+        description=(
+            "Rotate every captured frame 180 degrees at acquisition. Required when "
+            "the camera board is mounted inverted (e.g. for USB clearance). This is "
+            "NOT cosmetic: a 180 degree rotation swaps which half of the side-by-side "
+            "stereo frame belongs to which camera, so without it split_stereo_frame() "
+            "assigns them backwards and triangulation is silently wrong. Must be "
+            "applied identically during calibration, training and runtime."
+        ),
+    )
+
+    # Velocity gate — rejects physically impossible jumps in tracked points
+    velocity_gate_enabled: bool = Field(
+        default=True,
+        description="Reject detections that would require impossible speed",
+    )
+    tip_max_speed_m_s: float = Field(
+        default=0.75,
+        description=(
+            "Speed limit for the tentacle tip. Measured on this build: median "
+            "motion 0.11 m/s; 0.75 removed 100% of >50mm frame-to-frame jumps at "
+            "a cost of 12% of detections."
+        ),
+    )
+    target_max_speed_m_s: float = Field(
+        default=0.75,
+        description=(
+            "Speed limit for the fingertip. Measured median 0.24 m/s; 0.75 removed "
+            "93% of outliers for 2.4% of detections. Values >=2.0 do nothing."
+        ),
+    )
+    velocity_gate_max_rejects: int = Field(
+        default=3,
+        description=(
+            "Consecutive rejections before force-accepting. Without this a single "
+            "bad reference position would lock out detection permanently."
+        ),
+    )
+
     # Detection parameters
     confidence_threshold: float = Field(
         default=0.3, description="Confidence threshold for object detection"

@@ -48,6 +48,7 @@ def undistort_points(
     camera_matrix: np.ndarray,
     distortion_coeffs: np.ndarray,
     projection_matrix: np.ndarray,
+    rectification_matrix: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Undistort 2D points using camera calibration parameters.
 
@@ -56,13 +57,23 @@ def undistort_points(
         camera_matrix: Camera intrinsic matrix K
         distortion_coeffs: Distortion coefficients D
         projection_matrix: Projection matrix P
+        rectification_matrix: Rectification rotation R (R1 for left, R2 for right)
+            from cv2.stereoRectify. REQUIRED when P came from stereoRectify, since
+            P is expressed in the rectified frame: without R the points stay in the
+            original camera frame and triangulation carries a systematic scale
+            error that no amount of re-measuring the board can remove. Pass None
+            only for calibrations whose P matrices are already unrectified.
 
     Returns:
         Undistorted points in projection matrix reference frame
     """
     pts = np.asarray(points, np.float32).reshape(-1, 1, 2)
     undistorted = cv2.undistortPoints(
-        pts, camera_matrix, distortion_coeffs, P=projection_matrix
+        pts,
+        camera_matrix,
+        distortion_coeffs,
+        R=rectification_matrix,
+        P=projection_matrix,
     )
     return undistorted.reshape(points.shape)
 
@@ -82,6 +93,11 @@ class StereoCalibration:
     K2: np.ndarray
     D2: np.ndarray
     P2: np.ndarray
+    # Rectification rotations from cv2.stereoRectify. Optional for backward
+    # compatibility with older pickles that predate them; when absent, points are
+    # undistorted into the original camera frame (see undistort_points).
+    R1: Optional[np.ndarray] = None
+    R2: Optional[np.ndarray] = None
 
     @classmethod
     def from_raw(cls, raw: Dict[str, Any]) -> "StereoCalibration":
@@ -94,6 +110,8 @@ class StereoCalibration:
             K2=raw["cameraMatrix2"],
             D2=raw["distCoeffs2"],
             P2=raw["P2"],
+            R1=raw.get("R1"),
+            R2=raw.get("R2"),
         )
 
     def as_tuple(
@@ -102,6 +120,11 @@ class StereoCalibration:
         """Return the six OpenCV matrices as a tuple (K1, D1, P1, K2, D2, P2)."""
 
         return self.K1, self.D1, self.P1, self.K2, self.D2, self.P2
+
+    def has_rectification(self) -> bool:
+        """True when both rectification rotations are available."""
+
+        return self.R1 is not None and self.R2 is not None
 
 
 def triangulate_points(
@@ -136,9 +159,12 @@ def triangulate_points(
 
     K1, D1, P1, K2, D2, P2 = calib.as_tuple()
 
-    # Undistort points
-    undistorted_left = undistort_points(xy_left, K1, D1, P1)
-    undistorted_right = undistort_points(xy_right, K2, D2, P2)
+    # Undistort into the frame P1/P2 are expressed in. When the calibration carries
+    # rectification rotations, P1/P2 came from stereoRectify and R1/R2 MUST be
+    # applied — otherwise points stay in the original camera frame and every
+    # triangulated position picks up a systematic scale error.
+    undistorted_left = undistort_points(xy_left, K1, D1, P1, calib.R1)
+    undistorted_right = undistort_points(xy_right, K2, D2, P2, calib.R2)
 
     # Triangulate homogeneous point then convert to Euclidean
     point_4d = cv2.triangulatePoints(
