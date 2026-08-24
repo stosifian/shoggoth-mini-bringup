@@ -1,11 +1,12 @@
 """Motor controller abstraction for Feetech servos."""
 
 import logging
+import threading
 import time
 from typing import Dict, Optional, Tuple
 
 from ..configs.hardware import HardwareConfig
-from ..common.constants import MOTOR_NAMES
+from ..common.constants import MOTOR_NAMES, MOTOR_ONE_FULL_TURN_TICKS
 from .calibration import load_calibration, validate_calibration
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,13 @@ class MotorController:
         self._motor_bus = None
         self._is_connected = False
         self._calibration_data: Dict[str, int] = {}
+        # (KEPT CHANGE 1 of 3) One half-duplex serial bus, three concurrent writers:
+        # the idle-motion thread, primitives from the orchestrator's async handler,
+        # and the closed-loop controller thread. Nothing serialised them, which
+        # produced "[TxRxResult] Port is in use!" and killed the idle thread with an
+        # unhandled exception (2026-08-12). RLock because set_positions nests into
+        # set_position. Does NOT change any commanded value.
+        self._bus_lock = threading.RLock()
 
     def connect(self) -> None:
         """Connect to motor bus and initialize motors.
@@ -92,8 +100,35 @@ class MotorController:
         if motor_name not in self.config.motor_config:
             raise RuntimeError(f"Unknown motor: {motor_name}")
 
+        # (KEPT CHANGE 3 of 3) Refuse targets outside the encoder range.
+        #
+        # This REFUSES; it never rewrites. A clamp would silently alter the
+        # commanded pose, and in a differential three-tendon system clamping one
+        # motor while the others move produces a pose nobody asked for.
+        #
+        # Measured 2026-08-18: grab at the upstream 0.7 commanded motor 2 to 4915,
+        # past the fold. Present_Position then reads negative, so the next
+        # read-modify-write in any control path computes a negative target — and a
+        # raw negative Goal_Position is decoded SIGN-MAGNITUDE by this firmware,
+        # turning -3217 into a target of -29551. The motor runs away at full speed
+        # until it jams.
+        #
+        # Negative values are refused too, including geometry.py's
+        # `-32768 - absolute` encoding. That encoding is correct for the wire
+        # format, but with the calibrated zero at mid-range it should never fire;
+        # if it does, the calibration or the cursor magnitude is wrong and the
+        # right outcome is a stop, not a move.
+        if not 0 <= position < MOTOR_ONE_FULL_TURN_TICKS:
+            raise RuntimeError(
+                f"Refusing out-of-range Goal_Position {position} for motor "
+                f"{motor_name} (valid 0..{MOTOR_ONE_FULL_TURN_TICKS - 1}). "
+                f"Past the encoder fold the position reading goes negative and "
+                f"every read-modify-write path then commands a runaway."
+            )
+
         try:
-            self._motor_bus.write("Goal_Position", position, motor_name)
+            with self._bus_lock:
+                self._motor_bus.write("Goal_Position", position, motor_name)
         except Exception as e:
             logger.error("Failed to set position for motor %s: %s", motor_name, e)
             raise RuntimeError(f"Failed to set position for {motor_name}: {e}")
@@ -107,8 +142,9 @@ class MotorController:
         Raises:
             RuntimeError: If motor communication fails
         """
-        for motor_name, position in positions.items():
-            self.set_position(motor_name, position)
+        with self._bus_lock:
+            for motor_name, position in positions.items():
+                self.set_position(motor_name, position)
 
     def get_position(self, motor_name: str) -> int:
         """Get current position of a motor.
@@ -129,7 +165,15 @@ class MotorController:
             raise RuntimeError(f"Unknown motor: {motor_name}")
 
         try:
-            return self._motor_bus.read("Present_Position", motor_name)
+            # (KEPT CHANGE 2 of 3) The bus returns a numpy array; this signature
+            # promises int. Returning the array crashed %d log formatting, which
+            # swallowed the very warning that reported a missed target (2026-08-12).
+            # Pure type coercion — the VALUE is unchanged.
+            with self._bus_lock:
+                raw = self._motor_bus.read("Present_Position", motor_name)
+            if hasattr(raw, "item"):
+                return int(raw.item()) if raw.size == 1 else int(raw[0])
+            return int(raw)
         except Exception as e:
             logger.error("Failed to read position for motor %s: %s", motor_name, e)
             raise RuntimeError(f"Failed to read position for {motor_name}: {e}")
@@ -141,8 +185,9 @@ class MotorController:
             Dictionary mapping motor names to current positions
         """
         positions = {}
-        for motor_name in self.config.motor_config.keys():
-            positions[motor_name] = self.get_position(motor_name)
+        with self._bus_lock:
+            for motor_name in self.config.motor_config.keys():
+                positions[motor_name] = self.get_position(motor_name)
         return positions
 
     def reset_to_calibrated_positions(self) -> None:
@@ -233,9 +278,21 @@ class MotorController:
                 self.config.calibration_file, MOTOR_NAMES
             )
 
+            # REFUSE, do not warn. A warning here was silently ignored while a
+            # calibration of -1548 on motor 2 drove a 4234-tick move with the
+            # tendons threaded (2026-08-18). This is a pre-flight check: it stops
+            # a run before anything moves and never alters a command in flight.
             if not validate_calibration(self._calibration_data):
-                logger.warning("Calibration data validation failed")
+                raise RuntimeError(
+                    f"Refusing to connect: calibration in "
+                    f"{self.config.calibration_file} is invalid "
+                    f"({self._calibration_data}). Every cursor target is computed "
+                    f"as an offset from these values, so a bad zero commands the "
+                    f"motors to unreachable positions. Re-run calibration."
+                )
 
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.warning("Failed to load calibration: %s", e)
             # Use zero positions as fallback
