@@ -1,9 +1,84 @@
-.env
-.DS_Store
+# Environments
+.venv/
+venv/
 __pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Training artifacts and datasets — regenerable, and far too large for git
+# (runs/ is 232 MB, synthetic_dataset/ is 143 MB)
+runs/
+synthetic_dataset/
+wandb/
+*.log
+
+# Model weights. The author tracks the ONNX baseline; these are local extras.
+yolo11n.pt
+*.pt
+*.onnx.bak
+assets/models/vision/hand_landmarker.task
+
+# Sliced print files. The .step sources are the useful artifact and are tracked;
+# .gcode.3mf is slicer output specific to one printer and profile, and the set
+# runs to tens of megabytes.
+*.gcode.3mf
+
+# Scratch images from ad-hoc debugging
+gt.png
+rl_path_flow.png
+vision_path_flow.png
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Secrets — none are present today, keep it that way
+.env
+.env.*
+*.key
+
+# RL training output — PPO checkpoints, ~210 MB of .zip model snapshots across
+# three runs. The trained policy that the robot actually uses is tracked under
+# assets/models/; these are the intermediate steps that produced it.
 results/
-**/data/**
-**/projects/**
-/media/
+
+# Stereo calibration capture set — 55 MB of raw checkerboard JPEGs. The derived
+# calibration (stereo_params.pickle et al) is tracked; the captures are not, and
+# they are specific to one camera mount.
+data/
+
+# MuJoCo scratch
 MUJOCO_LOG.TXT
-projects/**
+exploration/__pycache__/
+exploration/out/
+
+# ---------------------------------------------------------------------------
+# Private working notes. The public repo carries WRITEUP.md and nothing else in
+# prose form; these are personal build logs, forward-looking plans, and supplier
+# details. Code comments were rewritten to be self-contained so nothing public
+# depends on them.
+# ---------------------------------------------------------------------------
+LESSONS_LEARNED.md
+CLOSED_LOOP_DEBUG.md
+HARDWARE_DAY.md
+HARDWARE_PROCUREMENT.md
+HARDWARE_LEROBOT_SETUP.md
+ROADMAP.md
+NEXT_PHASE_EXPLORATION.md
+PRINTING.md
+PRINT_CHECKLIST.md
+MEMORY.md
+exploration/MOTION_SPACE_NOTES.md
+
+# Measurement artifacts from the characterisation series. The tools that produce
+# them are tracked and self-documenting; the raw CSV/PNG output is run-specific
+# and its explanatory README is a private note, so the data would ship
+# uninterpretable.
+diagnostics/
+
+# Next-phase design exploration — scratch tooling for a future form factor,
+# not part of this build.
+exploration/
