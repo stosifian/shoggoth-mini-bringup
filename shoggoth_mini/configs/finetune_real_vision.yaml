@@ -1,0 +1,51 @@
+# Real-footage fine-tune of the tentacle-tip detector.
+#
+# WHY: the synthetic-trained model overfits to one background. Observed failure —
+# tip detection drops out when a human face is behind the tip (skin tones, curved
+# high-contrast edges, absent from synthetic training).
+#
+# INPUT vs OUTPUT — these must not collide:
+#   base_model      = weights READ as the starting point
+#   project/experiment = directory WRITTEN to
+# Nothing is edited in place. The shipped baseline
+# (assets/models/vision/tentacle_tracking_baseline.onnx) is untouched by training,
+# and perception keeps using it until yolo_model_path is deliberately repointed —
+# which is what lets you A/B the two before committing.
+#
+# NOTE: base_model must be a .pt. The shipped baseline is ONNX (inference-only
+# export) and cannot be fine-tuned from; hence starting from our own synthetic run.
+#
+#   python -m shoggoth_mini vision train real_dataset/dataset.yaml \
+#       -c shoggoth_mini/configs/finetune_real_vision.yaml
+
+vision_training:
+  # READ: our synthetic-trained weights (Jul 9 run, newest local .pt)
+  base_model: "runs/detect/yolo_training/my_run/weights/best.pt"
+
+  # WRITE: a distinct run dir so no previous run is touched. Ultralytics
+  # auto-increments if this name already exists, but be explicit anyway.
+  project_name: "yolo_training"
+  experiment_name: "finetune_real_v1"
+
+  # Fine-tuning from good weights on a few hundred real frames — not from scratch.
+  # patience 30 stops early once validation plateaus, so this is an upper bound.
+  epochs: 100
+  image_size: 640
+  batch_size: 16
+  device: "cpu"          # set to "mps" on Apple silicon if ultralytics supports it
+
+  export_to_onnx: true   # runtime loads ONNX, so export is required to deploy
+  onnx_optimize: true
+  onnx_dynamic: true
+  onnx_simplify: true
+
+  additional_params:
+    patience: 30
+    save_period: 10
+    workers: 8
+    optimizer: "auto"
+    # Lower than the 0.01 used for from-scratch training: fine-tuning should nudge
+    # existing features toward real backgrounds, not overwrite what already works.
+    lr0: 0.001
+    momentum: 0.937
+    weight_decay: 0.0005

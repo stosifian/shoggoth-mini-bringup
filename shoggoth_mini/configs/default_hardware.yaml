@@ -7,7 +7,7 @@ hardware:
   baudrate: 1000000
 
   # Serial port configuration
-  port: "/dev/tty.usbmodem58FA0823471"
+  port: "/dev/tty.usbmodem5B610324221"
 
   # Calibration
   calibration_file: "assets/hardware/calibration/tentacle_calibration.json"

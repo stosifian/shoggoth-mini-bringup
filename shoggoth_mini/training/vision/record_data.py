@@ -10,6 +10,7 @@ from typing_extensions import Annotated
 from rich.console import Console
 
 from ...configs.loaders import get_perception_config
+from ...perception.camera import read_oriented
 
 app = typer.Typer(help="Record data from stereo camera for calibration or annotation")
 console = Console()
@@ -86,7 +87,7 @@ def record_stereo_video(
             left_writer, right_writer = create_writers(chunk_index)
             console.print(f"Started recording chunk {chunk_index}")
 
-        ret, frame = cap.read()
+        ret, frame = read_oriented(cap)
         if not ret:
             break
 
@@ -175,7 +176,7 @@ def capture_calibration_images(
             while pair_index <= num_pairs:
                 current_time = time.time()
 
-                ret, combined_frame = cap.read()
+                ret, combined_frame = read_oriented(cap)
                 if not ret:
                     console.print(
                         f"Error: Failed to grab frame from camera {camera_index}"
@@ -189,7 +190,7 @@ def capture_calibration_images(
                 time_since_last_capture = current_time - last_capture_time
                 if time_since_last_capture >= interval_sec:
                     # Capture final frame for saving
-                    ret_cap, combined_frame_cap = cap.read()
+                    ret_cap, combined_frame_cap = read_oriented(cap)
                     if not ret_cap:
                         console.print("Error: Failed to capture final frame for saving")
                         break
@@ -218,6 +219,117 @@ def capture_calibration_images(
         console.print("Recording completed successfully")
 
 
+def capture_calibration_images_manual(
+    output_folder: Path,
+    pattern: tuple[int, int],
+    camera_index: int = 0,
+    detect_every: int = 2,
+):
+    """Manually capture stereo calibration pairs with live checkerboard feedback.
+
+    Shows a live left|right preview that runs the checkerboard detector on both
+    halves each frame and reports L/R detection status, so you press SPACE to
+    save only when the board is cleanly visible in BOTH views. Detection runs on
+    the downscaled preview (fast, guidance only); the FULL-RES frame is saved.
+
+    Args:
+        output_folder: Output directory for calibration images
+        pattern: (cols, rows) of INTERNAL corners, for the live detection overlay
+        camera_index: Camera device index
+        detect_every: Run detection every N frames to keep the preview smooth
+    """
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        console.print(f"[red]Error: Cannot open camera with index {camera_index}[/red]")
+        raise typer.Exit(1)
+
+    config = get_perception_config()
+    width, height = config.stereo_resolution
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    half_width = frame_width // 2
+    if frame_width == 0:
+        console.print("[red]Error: Could not get frame dimensions from camera[/red]")
+        cap.release()
+        raise typer.Exit(1)
+
+    output_folder.mkdir(parents=True, exist_ok=True)
+    # append after any existing pairs so we never clobber earlier good captures
+    existing = sorted(output_folder.glob("camera-1-*.jpg"))
+    pair_index = len(existing) + 1
+    console.print(f"Camera {frame_width}x{frame_height} -> half {half_width}x{frame_height}")
+    console.print(f"Detecting a {pattern[0]}x{pattern[1]} internal-corner board.")
+    console.print("[bold]SPACE[/bold] = capture pair   [bold]q[/bold]/Esc = quit"
+                  f"   (saving into {output_folder}, starting at {pair_index:02d})")
+
+    sb_flags = cv2.CALIB_CB_NORMALIZE_IMAGE
+    frame_i = 0
+    ok_l = ok_r = False
+    corners_l = corners_r = None
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    try:
+        while True:
+            ret, frame = read_oriented(cap)
+            if not ret:
+                console.print("[red]Error: frame grab failed[/red]")
+                break
+            left = frame[:, :half_width]
+            right = frame[:, half_width:]
+
+            # build a downscaled preview; detect on the preview halves so drawn
+            # corners line up with what's shown (guidance only, not the saved data)
+            target_w = 1600
+            scale = target_w / frame_width
+            preview = cv2.resize(frame, (target_w, int(frame_height * scale)))
+            ph = preview.shape[1] // 2
+            pv_l, pv_r = preview[:, :ph], preview[:, ph:]
+
+            frame_i += 1
+            if frame_i % detect_every == 0:
+                gl = cv2.cvtColor(pv_l, cv2.COLOR_BGR2GRAY)
+                gr = cv2.cvtColor(pv_r, cv2.COLOR_BGR2GRAY)
+                ok_l, corners_l = cv2.findChessboardCornersSB(gl, pattern, sb_flags)
+                ok_r, corners_r = cv2.findChessboardCornersSB(gr, pattern, sb_flags)
+
+            if ok_l and corners_l is not None:
+                cv2.drawChessboardCorners(pv_l, pattern, corners_l, True)
+            if ok_r and corners_r is not None:
+                cv2.drawChessboardCorners(pv_r, pattern, corners_r, True)
+
+            both = ok_l and ok_r
+            color = (0, 255, 0) if both else (
+                (0, 180, 255) if (ok_l or ok_r) else (0, 0, 255))
+            combined = cv2.hconcat([pv_l, pv_r])
+            cv2.putText(combined,
+                        f"L:{'OK' if ok_l else '--'}  R:{'OK' if ok_r else '--'}"
+                        f"   saved:{pair_index - 1}",
+                        (10, 30), font, 0.8, color, 2, cv2.LINE_AA)
+            cv2.putText(combined, "SPACE=capture  q=quit",
+                        (10, combined.shape[0] - 15), font, 0.6,
+                        (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.imshow("Manual stereo capture (left | right)", combined)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                break
+            if key == ord(" "):
+                img1 = output_folder / f"camera-1-{pair_index:02d}.jpg"
+                img2 = output_folder / f"camera-2-{pair_index:02d}.jpg"
+                cv2.imwrite(str(img1), left)
+                cv2.imwrite(str(img2), right)
+                tag = "both OK" if both else (
+                    "L only" if ok_l else ("R only" if ok_r else "no detect"))
+                warn = "" if both else "  [yellow](not both — will be skipped in calib)[/yellow]"
+                console.print(f"saved pair {pair_index:02d} ({tag}){warn}")
+                pair_index += 1
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        console.print(f"Done. {pair_index - 1} total pairs in {output_folder}")
+
+
 @app.command("annotation")
 def record_annotation_video(
     duration: Annotated[int, typer.Option(help="Recording duration in seconds")] = 60,
@@ -236,18 +348,39 @@ def record_annotation_video(
 @app.command("stereo-calibration")
 def record_calibration_images(
     num_pairs: Annotated[
-        int, typer.Option(help="Number of image pairs to capture")
+        int, typer.Option(help="Number of image pairs to capture (timer mode)")
     ] = 20,
     output_dir: Annotated[Path, typer.Option(help="Output directory")] = Path(
         "data/calibration"
     ),
     interval: Annotated[
-        int, typer.Option(help="Interval between captures (seconds)")
+        int, typer.Option(help="Interval between captures (seconds, timer mode)")
     ] = 3,
     camera_index: Annotated[int, typer.Option(help="Camera index")] = 0,
+    manual: Annotated[
+        bool,
+        typer.Option(
+            "--manual",
+            help="Manual capture: press SPACE to save, with live L/R detection feedback",
+        ),
+    ] = False,
+    cols: Annotated[
+        int, typer.Option(help="Board internal corners across (for --manual overlay)")
+    ] = 9,
+    rows: Annotated[
+        int, typer.Option(help="Board internal corners down (for --manual overlay)")
+    ] = 6,
 ):
-    """Capture stereo image pairs for camera calibration."""
-    capture_calibration_images(output_dir, num_pairs, interval, camera_index)
+    """Capture stereo image pairs for camera calibration.
+
+    Default is timed capture every --interval seconds. Use --manual to instead
+    press SPACE to capture, with a live overlay showing whether the checkerboard
+    is detected in BOTH halves (so you only save well-framed pairs).
+    """
+    if manual:
+        capture_calibration_images_manual(output_dir, (cols, rows), camera_index)
+    else:
+        capture_calibration_images(output_dir, num_pairs, interval, camera_index)
 
 
 if __name__ == "__main__":

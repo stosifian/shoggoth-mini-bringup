@@ -1,0 +1,29 @@
+vision_training:
+  # Model configuration
+  base_model: "yolo11n.pt"
+
+  # Training parameters
+  epochs: 30
+  image_size: 640
+  batch_size: 16
+  device: "mps"
+
+  # Project organization
+  project_name: "yolo_training"
+  experiment_name: "my_run"
+
+  # Export settings
+  export_to_onnx: true
+  onnx_optimize: true
+  onnx_dynamic: true
+  onnx_simplify: true
+
+  # Additional training parameters
+  additional_params:
+    patience: 30
+    save_period: 10
+    workers: 8
+    optimizer: "auto"
+    lr0: 0.01
+    momentum: 0.937
+    weight_decay: 0.0005 
