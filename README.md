@@ -1,3 +1,23 @@
+> ### This is a derivative work
+>
+> The Shoggoth Mini robot — its hardware design, RL policy, orchestrator and the
+> original code in this repository — is by **Matthieu Le Cauchois**:
+> [mlecauchois/shoggoth-mini](https://github.com/mlecauchois/shoggoth-mini) ·
+> [blogpost](https://www.matthieulc.com/posts/shoggoth-mini/). Used under the MIT
+> licence; the original copyright notice is retained in [LICENSE](LICENSE). This
+> repository is not affiliated with or endorsed by the original author.
+>
+> **What this repository adds** is a build log and a set of hardware findings from
+> assembling and bringing up a physical unit: a redesigned dome, stereo camera
+> calibration fixes, and a measured characterisation of the Feetech STS3215
+> servos that corrected several wrong assumptions — including one that had been
+> destroying tendons. See **[WRITEUP.md](WRITEUP.md)** for the account, and
+> [`tools/`](tools/) for the characterisation harness.
+>
+> The README below is the original author's, unmodified.
+
+---
+
 # Shoggoth Mini
 ![System demonstration](assets/media/system.gif)
 
