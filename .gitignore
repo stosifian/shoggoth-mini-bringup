@@ -56,10 +56,10 @@ exploration/__pycache__/
 exploration/out/
 
 # ---------------------------------------------------------------------------
-# Private working notes. The public repo carries WRITEUP.md and nothing else in
-# prose form; these are personal build logs, forward-looking plans, and supplier
-# details. Code comments were rewritten to be self-contained so nothing public
-# depends on them.
+# Private working notes. The public repo carries README.md (the build writeup)
+# and UPSTREAM_README.md, and nothing else in prose form; these are personal
+# build logs, forward-looking plans, and supplier details. Code comments were
+# rewritten to be self-contained so nothing public depends on them.
 # ---------------------------------------------------------------------------
 LESSONS_LEARNED.md
 CLOSED_LOOP_DEBUG.md
