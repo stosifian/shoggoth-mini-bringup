@@ -26,6 +26,7 @@ class MotionBehavior(Enum):
     NO = "<no>"
     SHAKE = "<shake>"
     CIRCLE = "<circle>"
+    SLOW_CIRCLE = "<slow_circle>"
     GRAB = "<grab_object>"
     RELEASE = "<release_object>"
     HIGH_FIVE = "<high_five>"
@@ -85,19 +86,56 @@ class CircleMotionConfig:
 
 
 @dataclass
+class SlowCircleMotionConfig:
+    """Circle sized to what the servos can actually deliver.
+
+    The stock circle asks for more than the hardware can do, in two separate
+    ways (measured 2026-08-26 with tools/char_primitive_sweep.py --dry-run):
+
+        entry jump   248 ticks in 9 ms  = 27,556 ticks/s   3.6x the ceiling
+        steady state  87 ticks in 9 ms  =  9,667 ticks/s   1.3x the ceiling
+
+    against a measured servo ceiling of ~7600 ticks/s. The consequence is that
+    the traced shape is set by servo dynamics rather than by the waypoints, so
+    tuning radius or points does much less than it appears to, and the entry is
+    a slam from neutral rather than a curve.
+
+    This version keeps the same radius but triples the point count (smaller
+    steps), dwells longer at each, and eases in and out of the circle instead
+    of jumping. At these values the peak rate is about 1500 ticks/s — a fifth
+    of the ceiling — so the servo tracks the path instead of chasing it.
+    """
+
+    radius: float = 0.07
+    points_per_circle: int = 60
+    time_per_point: float = 0.02
+    revolutions: int = 2
+    # Points spent spiralling out to the radius, and back in again. The ease is
+    # a SPIRAL rather than a radial line: the angle keeps advancing while the
+    # radius changes, so the path never changes direction abruptly. An earlier
+    # version held angle 0 and moved straight in and out, which put a corner in
+    # the path exactly where the motion was supposed to be smoothest.
+    entry_steps: int = 15
+    # Below cursor_to_motor_positions' 0.01 deadzone every radius resolves to
+    # the calibrated position, so starting the spiral at 0 wastes commands that
+    # do nothing. Start just above it.
+    min_radius: float = 0.012
+
+
+@dataclass
 class GrabMotionConfig:
     """Configuration for grab/release motions - handcrafted positions."""
 
     grab_cursor_pos: np.ndarray = field(
-        # Upstream ships 0.7. This is 0.41 — see the sizing note below.
+        # Upstream ships 0.7. This is 0.28 — see the sizing note below.
         #
         # HISTORY, because the stated reason for the first change was wrong:
         # it was reduced to 0.25 on 2026-08-14 with the explanation that these
         # servos take a modulo-4096 SHORTEST PATH, so a command over 2048 ticks
         # executes backwards. THAT EXPLANATION WAS WRONG. Test C swept +/-50 to
         # +/-2000 and test D/E ran 0 to 4150: no reversal anywhere, and no special
-        # behaviour at 2048. The probe that "confirmed" it (modular_path_probe.py,
-        # 11/11) was run against a calibration whose motor-2 zero was -1548, so
+        # behaviour at 2048. The probe that "confirmed" it 11/11 was run against
+        # a calibration whose motor-2 zero was -1548, so
         # every one of its targets was a negative absolute position and it was
         # measuring the sign-magnitude encoding, not a shortest-path rule. Treat
         # that probe's results as void.
@@ -108,7 +146,15 @@ class GrabMotionConfig:
         # simultaneously. From a 2048 zero it targets 4915, outside 0..4095. Paying
         # cable out fast with no tension on it is what strips wire off the rollers.
         #
-        # SET TO 0.41 (2026-08-18). Sized for RETENSION HEADROOM, not for depth.
+        # SET TO 0.28 (2026-08-26). Sized for RETENSION HEADROOM, not for depth.
+        #
+        # This value tracks the calibrated zero and must be rechecked whenever
+        # the zero moves. With zeros at 2722/2684/2944 the arithmetic maximum is
+        # 0.336; 0.28 keeps ~200 ticks spare. Run
+        #   python tools/char_primitive_sweep.py --dry-run
+        # after any retension: it prints the largest magnitude that still fits.
+        #
+        # Previously 0.41, sized against zeros near 2168/2703/2166.
         #
         # Grab winds motor 2 in further than any other motion, so it is the first
         # thing to run out of range when the calibrated zero moves — and the zero
@@ -141,7 +187,7 @@ class GrabMotionConfig:
         #
         # Raising this further requires fold-safe position tracking everywhere,
         # not just a bigger number here.
-        default_factory=lambda: MOTOR_NORMALIZED_POSITIONS["2"] * 0.41
+        default_factory=lambda: MOTOR_NORMALIZED_POSITIONS["2"] * 0.28
     )
     hold_duration: float = 0.3
 
@@ -169,6 +215,7 @@ YES_CONFIG = YesMotionConfig()
 NO_CONFIG = NoMotionConfig()
 SHAKE_CONFIG = ShakeMotionConfig()
 CIRCLE_CONFIG = CircleMotionConfig()
+SLOW_CIRCLE_CONFIG = SlowCircleMotionConfig()
 GRAB_CONFIG = GrabMotionConfig()
 RELEASE_CONFIG = ReleaseMotionConfig()
 HIGH_FIVE_CONFIG = HighFiveMotionConfig()
@@ -281,6 +328,52 @@ def perform_circle_motion(
             )
             motor_controller.set_positions(target_positions)
             time.sleep(CIRCLE_CONFIG.time_per_point)
+
+
+def perform_slow_circle_motion(
+    motor_controller: MotorController,
+    calibrated_ticks_map: Dict[str, int],
+    *,
+    noise_scale: float = 0.0,
+) -> None:
+    """Circular motion at a rate the servos can actually track.
+
+    Differs from perform_circle_motion in three ways, each addressing a measured
+    problem rather than a preference: more points (smaller steps), a longer
+    dwell (lower rate), and an eased entry and exit (no slam from neutral).
+    """
+    cfg = SLOW_CIRCLE_CONFIG
+    step = 2 * np.pi / cfg.points_per_circle   # angular advance per command
+
+    def go(angle, radius):
+        target_positions, _ = cursor_to_motor_positions(
+            cursor_pos=np.array([radius * np.cos(angle), radius * np.sin(angle)],
+                                dtype=float),
+            calibrated_ticks_map=calibrated_ticks_map,
+            noise_scale=noise_scale,
+        )
+        motor_controller.set_positions(target_positions)
+        time.sleep(cfg.time_per_point)
+
+    angle = 0.0
+
+    # Spiral OUT: advance the angle while growing the radius, so the tentacle
+    # arrives on the circle already moving along it.
+    for k in range(cfg.entry_steps):
+        f = k / cfg.entry_steps
+        go(angle, cfg.min_radius + (cfg.radius - cfg.min_radius) * f)
+        angle += step
+
+    for _ in range(cfg.revolutions):
+        for _i in range(cfg.points_per_circle):
+            go(angle, cfg.radius)
+            angle += step
+
+    # Spiral IN, mirroring the entry, ending just inside the deadzone.
+    for k in range(cfg.entry_steps):
+        f = 1.0 - (k + 1) / cfg.entry_steps
+        go(angle, cfg.min_radius + (cfg.radius - cfg.min_radius) * f)
+        angle += step
 
 
 def perform_grab_motion(
@@ -402,6 +495,15 @@ def execute_behavior(
 
         elif behavior == MotionBehavior.CIRCLE:
             perform_circle_motion(
+                motor_controller,
+                calibrated_ticks_map,
+                noise_scale=noise_scale,
+            )
+            behaviors_performed = True
+            reset_after_sequence = True
+
+        elif behavior == MotionBehavior.SLOW_CIRCLE:
+            perform_slow_circle_motion(
                 motor_controller,
                 calibrated_ticks_map,
                 noise_scale=noise_scale,
