@@ -170,7 +170,7 @@ The real cause turned out to be that cv2.stereoRectify returns R1, R2, P1, P2 as
 
 The fix was to carry R1/R2 through the pipeline and pass them to undistortPoints. Re-running on the same images, with no re-shooting, I got corrected metrics all at once:
 
-|                    | Before  | After   |
+| Metric | Before  | After   |
 |--------------------|---------|---------|
 | Metric scale error | −11.1%  | +0.1%   |
 | Spacing std        | 0.86    | 0.34    |
