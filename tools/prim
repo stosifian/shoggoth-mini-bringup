@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Run one motion primitive without the angle-bracket and quoting dance.
+#
+#   tools/prim yes
+#   tools/prim slow_circle
+#   tools/prim wave_packet_fm
+#   tools/prim grab            (accepts grab / release as shorthand)
+#   tools/prim --list
+#
+# Wraps: python -m shoggoth_mini primitive '<name>' --config ... --noise 0
+# The brackets are what MotionBehavior actually matches, and unquoted they are
+# shell redirection — which is what produces a stray `quote>` prompt.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+NAMES=(yes no shake circle slow_circle slow_breathe wave_packet_am
+       wave_packet_fm grab_object release_object high_five)
+
+if [[ $# -lt 1 || "${1:-}" == "--list" || "${1:-}" == "-l" ]]; then
+    printf 'available primitives:\n'
+    printf '  %s\n' "${NAMES[@]}"
+    exit 0
+fi
+
+name="$1"; shift
+[[ "$name" == "grab"    ]] && name="grab_object"
+[[ "$name" == "release" ]] && name="release_object"
+
+found=0
+for n in "${NAMES[@]}"; do [[ "$n" == "$name" ]] && found=1; done
+if [[ $found -eq 0 ]]; then
+    printf 'unknown primitive: %s\n\navailable:\n' "$name"
+    printf '  %s\n' "${NAMES[@]}"
+    exit 1
+fi
+
+exec .venv/bin/python -m shoggoth_mini primitive "<${name}>" \
+    --config shoggoth_mini/configs/default_hardware.yaml --noise 0 "$@"

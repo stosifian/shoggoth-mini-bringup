@@ -63,11 +63,15 @@ TICKS_TO_MM = 0.11 / PERIOD * 1000
 # (0.25) but is rate-limited to 15 ticks per 10 ms loop, so it moves at ~1500
 # ticks/s, a fifth of the servo ceiling. Grab is last because it is a single
 # unramped command. RELEASE is the neutral pose, so it is a no-op opener.
-ORDER = ["sweep", "release", "circle", "shake", "high_five", "yes", "no", "grab"]
+ORDER = ["sweep", "release", "slow_breathe", "packet_am", "packet_fm", "slow_circle", "circle", "shake", "high_five", "yes", "no", "grab"]
 BEHAVIOUR = {
     "sweep": "sweep",           # not a MotionBehavior: dispatched to perform_sweep
     "yes": MotionBehavior.YES, "no": MotionBehavior.NO,
     "shake": MotionBehavior.SHAKE, "circle": MotionBehavior.CIRCLE,
+    "slow_circle": MotionBehavior.SLOW_CIRCLE,
+    "packet_am": MotionBehavior.PACKET_AM,
+    "packet_fm": MotionBehavior.PACKET_FM,
+    "slow_breathe": MotionBehavior.SLOW_BREATHE,
     "grab": MotionBehavior.GRAB, "release": MotionBehavior.RELEASE,
     "high_five": MotionBehavior.HIGH_FIVE,
 }
@@ -334,7 +338,7 @@ def plot_static(csv_path, out_path, rows, calib):
     print(f"static plot -> {out_path}")
 
 
-def print_static(rows):
+def print_static(rows, calib):
     print(f"\n{'primitive':>11}{'cmds':>6}{'max step':>10}{'cable':>9}"
           f"{'travel':>8}{'cable':>9}{'implied':>11}{'range':>8}")
     print(f"{'':>11}{'':>6}{'(ticks)':>10}{'(mm)':>9}{'(ticks)':>8}{'(mm)':>9}"
@@ -348,6 +352,26 @@ def print_static(rows):
         print(f"{r['name']:>11}{r['n']:>6}{r['max_step']:>10}"
               f"{r['max_step']*TICKS_TO_MM:>9.1f}{r['max_travel']:>8}"
               f"{r['max_travel']*TICKS_TO_MM:>9.1f}{r['implied']:>11.0f}{flag:>8}")
+    # Grab is always the first primitive to run out of range, because it winds
+    # motor 2 in further than anything else. Report the largest magnitude that
+    # still fits the CURRENT zero, so the constant can be rechecked after every
+    # retension instead of recomputed by hand.
+    try:
+        from shoggoth_mini.common.constants import MOTOR_NORMALIZED_POSITIONS as _P
+        import numpy as _np
+        axis = _np.asarray(_P["2"], dtype=float)
+        axis = axis / _np.linalg.norm(axis)
+        # motor 2's offset is magnitude * 4096 on its own axis
+        for reserve in (0, 200):
+            mx = (PERIOD - 1 - 36 - reserve - calib["2"]) / PERIOD
+            label = "arithmetic max" if reserve == 0 else "with 200 ticks spare"
+            print(f"  grab magnitude {label:>22}: {max(mx, 0):.3f}")
+        from shoggoth_mini.control.primitives import GRAB_CONFIG
+        cur = float(_np.linalg.norm(_np.asarray(GRAB_CONFIG.grab_cursor_pos)))
+        print(f"  {'currently set to':>39}: {cur:.3f}")
+    except Exception as e:
+        print(f"  (could not compute grab limit: {e})")
+
     bad = [r for r in rows if r.get("out_of_range")]
     if bad:
         print("\ntargets outside 0..4095:")
@@ -374,6 +398,11 @@ def main():
                     help="shift the calibrated zero of every motor by this much, "
                          "to check that a retensioning offset does not push any "
                          "primitive out of range")
+    ap.add_argument("--trials", type=int, default=1, metavar="N",
+                    help="repeat the static pass N times. Only meaningful with "
+                         "--noise: the primitives add Gaussian noise to the cursor, "
+                         "so a single pass samples one draw. Use this to find the "
+                         "worst case the orchestrator can actually produce.")
     ap.add_argument("--noise", type=float, default=0.0,
                     help="noise_scale passed to the primitives (0 = deterministic)")
     ap.add_argument("--settle", type=float, default=1.0,
@@ -418,8 +447,69 @@ def main():
 
     print("\n=== PHASE 1 — static, nothing moves ===")
     rows = static_pass(names, calib, args.noise, args.static_csv)
-    print_static(rows)
+    print_static(rows, calib)
     plot_static(args.static_csv, args.static_plot, rows, calib)
+
+    if args.trials > 1:
+        # The primitives add Gaussian noise to the cursor (execute_behavior
+        # defaults to 0.010, and the orchestrator does not override it), so one
+        # pass samples one draw. Repeat to find the worst case reachable in
+        # normal operation rather than the noise-free best case.
+        print(f"\n=== {args.trials} trials at noise {args.noise} "
+              f"— worst case across draws ===")
+        worst = {n: {"hi": -10**9, "lo": 10**9, "fails": 0} for n in names}
+        # The primitives sleep between commands, so honest timing would make 300
+        # trials take ~25 minutes. Range does not depend on timing, so suppress
+        # the sleeps for this pass only. The implied-rate figures printed above
+        # come from the single honest pass and are unaffected.
+        _real_sleep = time.sleep
+        time.sleep = lambda *_a, **_k: None
+        try:
+            import shoggoth_mini.control.primitives as _prims
+            _prim_sleep = _prims.time.sleep
+            _prims.time.sleep = lambda *_a, **_k: None
+        except Exception:
+            _prims = None
+        try:
+            for _ in range(args.trials):
+                for r in static_pass(names, calib, args.noise, None):
+                    if not r.get("n"):
+                        continue
+                    w = worst[r["name"]]
+                    hi = max(v for v in r["hi"].values() if v is not None)
+                    lo = min(v for v in r["lo"].values() if v is not None)
+                    w["hi"] = max(w["hi"], hi)
+                    w["lo"] = min(w["lo"], lo)
+                    if r["out_of_range"]:
+                        w["fails"] += 1
+        finally:
+            time.sleep = _real_sleep
+            if _prims is not None:
+                _prims.time.sleep = _prim_sleep
+        print(f"{'primitive':>12}{'worst low':>11}{'worst high':>12}"
+              f"{'margin':>9}{'out-of-range trials':>21}")
+        print("-" * 66)
+        any_fail = False
+        for n in names:
+            w = worst[n]
+            if w["hi"] < -10**8:
+                continue
+            margin = (PERIOD - 1) - w["hi"]
+            flag = ""
+            if w["fails"]:
+                flag = f"  {w['fails']}/{args.trials}  *** WOULD REFUSE ***"
+                any_fail = True
+            else:
+                flag = f"  0/{args.trials}"
+            print(f"{n:>12}{w['lo']:>11}{w['hi']:>12}{margin:>9}{flag}")
+        print()
+        if any_fail:
+            print("  -> at least one primitive can exceed the range under the noise")
+            print("     the orchestrator actually uses. Reduce its magnitude, or")
+            print("     lower the calibrated zeros.")
+        else:
+            print(f"  -> every primitive stayed inside 0..{PERIOD-1} on all "
+                  f"{args.trials} draws.")
 
     if args.dry_run:
         print("\ndry run — phase 1 only, nothing moved.")

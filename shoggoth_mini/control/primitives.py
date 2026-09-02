@@ -11,7 +11,10 @@ from rich.console import Console
 
 from .geometry import cursor_to_motor_positions
 from ..hardware.motors import MotorController
-from ..common.constants import MOTOR_NORMALIZED_POSITIONS
+from ..common.constants import (
+    MOTOR_NORMALIZED_POSITIONS,
+    MOTOR_ONE_FULL_TURN_TICKS,
+)
 from ..configs import get_hardware_config
 
 console = Console()
@@ -27,6 +30,9 @@ class MotionBehavior(Enum):
     SHAKE = "<shake>"
     CIRCLE = "<circle>"
     SLOW_CIRCLE = "<slow_circle>"
+    PACKET_AM = "<wave_packet_am>"
+    PACKET_FM = "<wave_packet_fm>"
+    SLOW_BREATHE = "<slow_breathe>"
     GRAB = "<grab_object>"
     RELEASE = "<release_object>"
     HIGH_FIVE = "<high_five>"
@@ -123,6 +129,129 @@ class SlowCircleMotionConfig:
 
 
 @dataclass
+class WavePacketAMConfig:
+    """Gaussian wave packet, amplitude-modulated — the textbook form.
+
+        cursor(t) = amplitude * exp(-0.5 (t/sigma)^2) * sin(2 pi f t) * direction
+
+    A sway along one axis that grows out of nothing, peaks, and fades. It needs
+    no explicit ease: the envelope starts and ends near zero by construction.
+
+    Sizing is set by the rate budget. Peak commanded rate is
+    amplitude * 4096 * 2 pi f ticks/s, and the servos top out near 7600. At
+    0.18 and 0.6 Hz that is ~2780 ticks/s, roughly a third of the ceiling, so
+    the servo tracks the waveform instead of chasing it. Raising either term
+    requires lowering the other.
+    """
+
+    amplitude: float = 0.18
+    frequency_hz: float = 0.6
+    sigma_s: float = 1.5
+    # Total duration in units of sigma, centred on the peak. 6 sigma captures
+    # 99.7% of the envelope, so the ends really are at zero.
+    span_sigmas: float = 6.0
+    direction_deg: float = 330.0     # motor 2's axis: toward the camera
+    time_per_point: float = 0.02
+
+    # LINEAR (False): x and y are driven in phase, so the cursor oscillates along
+    # direction_deg and the path is a straight line. On a pure tendon axis this
+    # gives the 1 : -0.5 : -0.5 split, i.e. two motors move identically.
+    #
+    # CIRCULAR (True): x and y are put in QUADRATURE — 90 degrees apart — so the
+    # cursor rotates while the Gaussian scales its radius, spiralling out and
+    # back in. In motor space that is the three tendons driven at 120-degree
+    # phase offsets, which is the same statement: the axes are already 120 apart,
+    # so a rotating cursor projects onto them as three phase-shifted sinusoids.
+    circular: bool = True
+
+    # Number of packets played back to back. The phase ACCUMULATES across
+    # repeats rather than resetting, so the rotation continues in the same
+    # direction through each seam; the envelope is what restarts. Because the
+    # envelope is ~0 at both ends of a packet, position is continuous there too.
+    repeats: int = 5
+
+
+@dataclass
+class WavePacketFMConfig:
+    """Gaussian wave packet, frequency-modulated — a circle that chirps.
+
+        f(t)     = f_min + (f_max - f_min) * exp(-0.5 (t/sigma)^2)
+        theta(t) = 2 pi * integral of f
+        cursor   = radius * (cos theta, sin theta)
+
+    Constant radius, varying angular rate: slow, accelerating to a peak, then
+    slowing again. The phase is INTEGRATED step by step rather than evaluated
+    as 2 pi f(t) t — the latter is a different signal and is discontinuous
+    wherever f changes.
+
+    Because the radius is constant, this one does need an ease, otherwise it
+    starts with a jump from neutral onto the circle. It spirals in and out, as
+    slow_circle does.
+    """
+
+    # Sped up 1.35x on 2026-08-28. A uniform time-scaling t -> 1.35t: sigma
+    # shrinks by that factor and both frequencies rise by it, so the shape is
+    # identical and only the playback rate changes. Scaling sigma alone would
+    # shorten the packet without making it move faster; scaling frequency alone
+    # would speed the rotation without shortening it.
+    #   was  sigma 2.0, f 0.15-0.70 Hz, 12.2 s, peak 2611 ticks/s
+    #   now  sigma 1.48, f 0.20-0.95 Hz,  9.0 s, peak ~3550 ticks/s
+    radius: float = 0.15
+    f_min_hz: float = 0.2025
+    f_max_hz: float = 0.945
+    sigma_s: float = 1.4815
+    span_sigmas: float = 6.0
+    time_per_point: float = 0.02
+    entry_steps: int = 15
+    min_radius: float = 0.012      # above cursor_to_motor_positions' deadzone
+
+    # Radius envelope.
+    #   "triangle" : ramps linearly 0 -> radius at the midpoint -> 0, so the
+    #                packet grows and shrinks as well as speeding up and slowing
+    #                down. Both peak together at the centre.
+    #   "constant" : full radius throughout, with a short spiral ease at each end
+    #                (the original form).
+    # The triangle takes the radius to ~0 at both ends, which is inside
+    # cursor_to_motor_positions' 0.01 deadzone, so this primitive lowers that
+    # deadzone — otherwise the first and last ~2 s would snap flat to the
+    # calibrated position instead of tapering.
+    envelope: str = "triangle"
+
+    # Number of packets played back to back, phase accumulating across the seams
+    # exactly as for the AM packet.
+    repeats: int = 5
+
+
+@dataclass
+class SlowBreatheConfig:
+    """An undulating grab: motor 2 swelling from neutral to a peak and back.
+
+        offset_2(t) = peak_ticks * (1 - cos(2 pi t / period)) / 2
+
+    UNIPOLAR — it never goes below neutral, so it reads as a slow squeeze and
+    release rather than a sway through centre. Motors 1 and 3 pay out half as
+    much each, which is what any motion along a single tendon axis does.
+
+    A raised cosine rather than |sin|: its derivative is zero at both the top
+    and the bottom, so the breath eases in and out instead of cornering at the
+    neutral end.
+
+    peak_ticks is meaningful as ticks only because direction_deg is exactly
+    motor 2's axis, where that motor's alignment is 1.0 and the offset is
+    magnitude * 4096. Off-axis it would scale by the cosine of the difference.
+
+    Peak rate is peak_ticks * pi / period = 550 ticks/s at these values, about
+    7% of the servo ceiling — the gentlest primitive in the set.
+    """
+
+    peak_ticks: int = 700
+    period_s: float = 4.0
+    repeats: int = 5
+    direction_deg: float = 330.0     # motor 2's axis, toward the camera
+    time_per_point: float = 0.02
+
+
+@dataclass
 class GrabMotionConfig:
     """Configuration for grab/release motions - handcrafted positions."""
 
@@ -216,6 +345,9 @@ NO_CONFIG = NoMotionConfig()
 SHAKE_CONFIG = ShakeMotionConfig()
 CIRCLE_CONFIG = CircleMotionConfig()
 SLOW_CIRCLE_CONFIG = SlowCircleMotionConfig()
+PACKET_AM_CONFIG = WavePacketAMConfig()
+PACKET_FM_CONFIG = WavePacketFMConfig()
+SLOW_BREATHE_CONFIG = SlowBreatheConfig()
 GRAB_CONFIG = GrabMotionConfig()
 RELEASE_CONFIG = ReleaseMotionConfig()
 HIGH_FIVE_CONFIG = HighFiveMotionConfig()
@@ -376,6 +508,140 @@ def perform_slow_circle_motion(
         angle += step
 
 
+def perform_wave_packet_am_motion(
+    motor_controller: MotorController,
+    calibrated_ticks_map: Dict[str, int],
+    *,
+    noise_scale: float = 0.0,
+) -> None:
+    """Amplitude-modulated Gaussian wave packet, repeated `repeats` times.
+
+    The phase accumulates across repeats instead of resetting, so rotation
+    continues in one direction through every seam. The envelope is what
+    restarts, and since it is ~0 at both ends of a packet the position is
+    continuous there as well.
+    """
+    cfg = PACKET_AM_CONFIG
+    phase0 = np.radians(cfg.direction_deg)
+    d = np.array([np.cos(phase0), np.sin(phase0)])
+    half = cfg.span_sigmas * cfg.sigma_s / 2.0
+    n = max(2, int(round(2 * half / cfg.time_per_point)))
+
+    theta = 0.0
+    for rep in range(max(1, cfg.repeats)):
+        # Skip the first sample of later repeats: it duplicates the last sample
+        # of the previous packet, both sitting at envelope ~0.
+        for i in range(0 if rep == 0 else 1, n + 1):
+            t = -half + i * cfg.time_per_point
+            envelope = np.exp(-0.5 * (t / cfg.sigma_s) ** 2)
+            theta += 2 * np.pi * cfg.frequency_hz * cfg.time_per_point
+            if cfg.circular:
+                # Quadrature: cos and sin are 90 deg apart, so the cursor turns.
+                cursor = cfg.amplitude * envelope * np.array(
+                    [np.cos(theta + phase0), np.sin(theta + phase0)]
+                )
+            else:
+                cursor = cfg.amplitude * envelope * np.sin(theta) * d
+            target_positions, _ = cursor_to_motor_positions(
+                cursor_pos=cursor,
+                calibrated_ticks_map=calibrated_ticks_map,
+                noise_scale=noise_scale,
+                # The default 0.01 deadzone stops jitter around centre in
+                # interactive control; for a scripted waveform it is distortion.
+                # This packet passes through ~0 at every seam, and 34% of the
+                # linear form's commands were being snapped flat by it.
+                cursor_deadzone=1e-6,
+            )
+            motor_controller.set_positions(target_positions)
+            time.sleep(cfg.time_per_point)
+
+
+def perform_wave_packet_fm_motion(
+    motor_controller: MotorController,
+    calibrated_ticks_map: Dict[str, int],
+    *,
+    noise_scale: float = 0.0,
+) -> None:
+    """Frequency-modulated Gaussian wave packet, repeated `repeats` times.
+
+    Constant-rate rotation is what changes: f(t) is a Gaussian, the phase is
+    INTEGRATED step by step, and the radius follows the configured envelope.
+    Phase accumulates across repeats so the seams are continuous.
+    """
+    cfg = PACKET_FM_CONFIG
+    half = cfg.span_sigmas * cfg.sigma_s / 2.0
+    n = max(2, int(round(2 * half / cfg.time_per_point)))
+
+    def go(angle, radius):
+        target_positions, _ = cursor_to_motor_positions(
+            cursor_pos=np.array([radius * np.cos(angle), radius * np.sin(angle)]),
+            calibrated_ticks_map=calibrated_ticks_map,
+            noise_scale=noise_scale,
+            # The triangle envelope takes the radius to ~0, well inside the
+            # default 0.01 deadzone.
+            cursor_deadzone=1e-6,
+        )
+        motor_controller.set_positions(target_positions)
+        time.sleep(cfg.time_per_point)
+
+    theta = 0.0
+    for rep in range(max(1, cfg.repeats)):
+        for i in range(0 if rep == 0 else 1, n + 1):
+            t = -half + i * cfg.time_per_point
+            f = cfg.f_min_hz + (cfg.f_max_hz - cfg.f_min_hz) * np.exp(
+                -0.5 * (t / cfg.sigma_s) ** 2
+            )
+            # Integrate the phase; evaluating 2*pi*f(t)*t instead would be a
+            # different signal and would jump wherever f changes.
+            theta += 2 * np.pi * f * cfg.time_per_point
+
+            if cfg.envelope == "triangle":
+                # Linear ramp: 0 at both ends, full radius at the midpoint,
+                # where the frequency also peaks.
+                radius = cfg.radius * max(0.0, 1.0 - abs(t) / half)
+            else:
+                if i < cfg.entry_steps:
+                    frac = i / cfg.entry_steps
+                elif i > n - cfg.entry_steps:
+                    frac = (n - i) / cfg.entry_steps
+                else:
+                    frac = 1.0
+                radius = cfg.min_radius + (cfg.radius - cfg.min_radius) * frac
+            go(theta, radius)
+
+
+def perform_slow_breathe_motion(
+    motor_controller: MotorController,
+    calibrated_ticks_map: Dict[str, int],
+    *,
+    noise_scale: float = 0.0,
+) -> None:
+    """Slow undulating grab: a unipolar swell along motor 2's axis, repeated."""
+    cfg = SLOW_BREATHE_CONFIG
+    d = np.array([np.cos(np.radians(cfg.direction_deg)),
+                  np.sin(np.radians(cfg.direction_deg))])
+    peak_magnitude = cfg.peak_ticks / float(MOTOR_ONE_FULL_TURN_TICKS)
+    per_cycle = max(2, int(round(cfg.period_s / cfg.time_per_point)))
+
+    for rep in range(max(1, cfg.repeats)):
+        # Skip index 0 on later cycles: it repeats the previous cycle's final
+        # sample, both sitting at the bottom of the breath.
+        for i in range(0 if rep == 0 else 1, per_cycle + 1):
+            phase = 2 * np.pi * i / per_cycle
+            magnitude = peak_magnitude * (1.0 - np.cos(phase)) / 2.0
+            target_positions, _ = cursor_to_motor_positions(
+                cursor_pos=magnitude * d,
+                calibrated_ticks_map=calibrated_ticks_map,
+                noise_scale=noise_scale,
+                # The breath returns to zero every cycle, well inside the
+                # default 0.01 deadzone, which would otherwise snap the bottom
+                # of each breath flat to the calibrated position.
+                cursor_deadzone=1e-6,
+            )
+            motor_controller.set_positions(target_positions)
+            time.sleep(cfg.time_per_point)
+
+
 def perform_grab_motion(
     motor_controller: MotorController,
     calibrated_ticks_map: Dict[str, int],
@@ -498,6 +764,27 @@ def execute_behavior(
                 motor_controller,
                 calibrated_ticks_map,
                 noise_scale=noise_scale,
+            )
+            behaviors_performed = True
+            reset_after_sequence = True
+
+        elif behavior == MotionBehavior.SLOW_BREATHE:
+            perform_slow_breathe_motion(
+                motor_controller, calibrated_ticks_map, noise_scale=noise_scale,
+            )
+            behaviors_performed = True
+            reset_after_sequence = True
+
+        elif behavior == MotionBehavior.PACKET_AM:
+            perform_wave_packet_am_motion(
+                motor_controller, calibrated_ticks_map, noise_scale=noise_scale,
+            )
+            behaviors_performed = True
+            reset_after_sequence = True
+
+        elif behavior == MotionBehavior.PACKET_FM:
+            perform_wave_packet_fm_motion(
+                motor_controller, calibrated_ticks_map, noise_scale=noise_scale,
             )
             behaviors_performed = True
             reset_after_sequence = True
