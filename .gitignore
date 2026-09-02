@@ -19,6 +19,10 @@ yolo11n.pt
 *.pt
 *.onnx.bak
 assets/models/vision/hand_landmarker.task
+# Same deal, fetched by tools/face_landmarker README note rather than tracked:
+#   curl -o assets/models/vision/face_landmarker.task \
+#     https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+assets/models/vision/face_landmarker.task
 
 # Sliced print files. The .step sources are the useful artifact and are tracked;
 # .gcode.3mf is slicer output specific to one printer and profile, and the set
@@ -82,3 +86,10 @@ diagnostics/
 # Next-phase design exploration — scratch tooling for a future form factor,
 # not part of this build.
 exploration/
+
+# Perception and gesture recordings written by the exploration tools
+# (face_probe --csv, puppet's gesture takes). Same reasoning as diagnostics/:
+# the tools are tracked and self-describing, the takes are session-specific and
+# contain footage-derived data about whoever happened to be in front of the
+# cameras, which is not something to publish by default.
+out/
