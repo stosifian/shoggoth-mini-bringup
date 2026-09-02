@@ -500,6 +500,27 @@ class MotorSystem:
         Returns:
             New cable lengths after action execution
         """
+        # Limit the cursor MAGNITUDE, not the resulting ticks.
+        #
+        # max_2d_action_magnitude existed only in the RL training environment and
+        # in convert_2d_cursor_to_target_lengths; nothing bounded the policy's
+        # output on the live path. Trained with an action space of +/-1.0 per
+        # component, the policy can emit a magnitude near 1.41, which converts to
+        # targets far outside 0..4095 — set_position then refuses, the exception
+        # propagates out of the control loop, and tracking stops.
+        #
+        # Clamping here rather than in safe_set_motor_positions_ticks is
+        # deliberate: scaling the cursor scales all three motors together, so the
+        # commanded DIRECTION is preserved exactly and only the reach shortens.
+        # Clamping per-motor ticks instead moves one tendon while the others
+        # follow the original command, producing a pose nobody asked for.
+        limit = float(getattr(self.control_config, "max_2d_action_magnitude", 0.0))
+        action_2d = np.asarray(action_2d, dtype=float)
+        if limit > 0:
+            magnitude = float(np.linalg.norm(action_2d))
+            if magnitude > limit:
+                action_2d = action_2d * (limit / magnitude)
+
         # Convert 2D action directly to motor positions
         target_positions, _ = cursor_to_motor_positions(
             action_2d,

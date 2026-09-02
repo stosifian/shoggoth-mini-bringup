@@ -142,6 +142,21 @@ class MotorController:
         Raises:
             RuntimeError: If motor communication fails
         """
+        # Validate the WHOLE set before writing any of it. Writing motor by motor
+        # meant an out-of-range target on the second or third motor left the
+        # earlier ones already moved — a pose nobody commanded, with some tendons
+        # pulled and others not. A refusal should leave the robot where it was.
+        bad = {
+            m: p for m, p in positions.items()
+            if not 0 <= p < MOTOR_ONE_FULL_TURN_TICKS
+        }
+        if bad:
+            raise RuntimeError(
+                f"Refusing out-of-range Goal_Position(s) {bad} "
+                f"(valid 0..{MOTOR_ONE_FULL_TURN_TICKS - 1}). No motor was moved; "
+                f"the full set is checked before any of it is written."
+            )
+
         with self._bus_lock:
             for motor_name, position in positions.items():
                 self.set_position(motor_name, position)

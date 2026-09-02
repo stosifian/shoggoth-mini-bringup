@@ -6,7 +6,17 @@ control:
   deterministic: true
   actuator_low: 0.12
   actuator_high: 0.34
-  max_2d_action_magnitude: 1.0 # Maximum magnitude for 2D cursor actions
+  # Cursor magnitude ceiling, now ENFORCED on the live path in
+  # closed_loop.execute_action (it previously applied only in RL training).
+  # 0.25 rather than 1.0 for two independent reasons:
+  #   * range: with calibrated zeros near 2722/2684/2944, motor 3 binds at
+  #     4095 - 36 overshoot - 2944 = 1115 ticks, i.e. magnitude 0.272. Anything
+  #     above that produces a target set_position refuses, which throws out of
+  #     the control loop and stops tracking.
+  #   * usefulness: measured reachable range on this build is about 0.25; the
+  #     tentacle does not usefully extend past it.
+  # Raise this only after re-checking both — the zeros move with every retension.
+  max_2d_action_magnitude: 0.22
   include_actuator_lengths_in_obs: true # Whether to include actuator lengths in the observation
   clip_observations: true # Master switch for observation clipping
   obs_clip_bounds:
@@ -16,8 +26,19 @@ control:
     target_max: [-0.1, 0.07, 0.22] # Z, X, Y (from policy_training target_bounds)
     actuator_length_min: 0.12
     actuator_length_max: 0.28
-  safety_offset_min: -4000
-  safety_offset_max: 3000
+  # Per-motor tick backstop, applied in safe_set_motor_positions_ticks. At
+  # -4000/+3000 this was decoration: with zeros near 2700-2950 it permitted
+  # [-1278, 5843], wider than the 0..4095 the encoder can represent, so it never
+  # fired on anything that mattered.
+  #
+  # It is a per-motor CLAMP, so it distorts the commanded pose when it does fire
+  # (one tendon held while the others move). Treat it as a last-resort bound, not
+  # as the primary limit — max_2d_action_magnitude above is direction-preserving
+  # and should be what actually constrains motion. These values keep every target
+  # inside the encoder range for the current zeros, with the 36-tick overshoot
+  # allowed for.
+  safety_offset_min: -2600
+  safety_offset_max: 950
 
   # Calibration Configuration - Direct 2D Position
   calibration_2d_position: [0.13, -0.075]  # [x, y] in control plane, range [-1, 1]
@@ -37,7 +58,17 @@ control:
     base_period: 1.0
     base_period_range: [1.0, 5.0]
     amplitude: 0.05
-    amplitude_range: [0.05, 0.3]
+    # Upper bound lowered from 0.3 to 0.25 (2026-08-26). The pattern's
+    # origin-avoidance offset is PERPENDICULAR to the oscillation, so the cursor
+    # magnitude is sqrt(amp^2 + origin_avoidance_radius^2) — at amp 0.30 that is
+    # 0.308, which converts to a target of 4104 with the current zeros: 9 ticks
+    # outside the encoder range, so set_position refuses it. amp_base is resampled
+    # from this range every 5-20 s, and roughly 4% of draws exceeded the limit,
+    # so idle would throw every few minutes. Because idle runs in a thread, the
+    # exception kills the thread silently — the robot simply stops breathing while
+    # the rest of orchestrate keeps running.
+    # Largest safe value with the 36-tick overshoot allowed for is 0.289.
+    amplitude_range: [0.05, 0.20]
     direction_jitter_interval: 5.0
     direction_jitter_interval_range: [5.0, 20.0]
     direction_change_duration: 10.0
