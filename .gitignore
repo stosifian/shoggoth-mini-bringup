@@ -93,3 +93,12 @@ exploration/
 # contain footage-derived data about whoever happened to be in front of the
 # cameras, which is not something to publish by default.
 out/
+
+# Ad-hoc plots dumped at the repo root. Every one is a command away from being
+# remade from the CSVs or a recording, and they go stale the moment a table is
+# edited -- the tables and the tools are tracked, their output is not.
+# Scoped to the root ON PURPOSE: a bare *.png would also silence media/ and
+# assets/, where 35 tracked images live, including every figure the README
+# writeup depends on. Adding a new one would then fail silently.
+/*.png
+/*.numbers

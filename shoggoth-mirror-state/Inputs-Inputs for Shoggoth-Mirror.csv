@@ -1,0 +1,10 @@
+Inputs,Notes
+Face,1 means face present
+Attention,1 means attention is present (gaze < 25˚ condition)
+Yes,1 means a “yes” is detected
+No,1 means a “no” is detected
+Emotion: Neutral,Note for any “Emotion:” at most one can be present at a time
+Emotion: Content,Note for any “Emotion:” at most one can be present at a time
+Emotion: Excited,Note for any “Emotion:” at most one can be present at a time
+Emotion: Sad,Note for any “Emotion:” at most one can be present at a time
+Emotion: Angry,Note for any “Emotion:” at most one can be present at a time

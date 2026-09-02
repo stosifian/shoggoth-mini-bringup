@@ -198,7 +198,12 @@ EMOTIONS = ["Neutral", "Content", "Excited", "Sad", "Angry"]
 BOOLS = ["Face", "Attention", "Yes", "No"]
 
 
-def legal_vectors(assume_neutral_without_face: bool = True):
+def active_emotion(v: dict) -> str | None:
+    """Which emotion is asserted, or None when no face was seen."""
+    return next((e for e in EMOTIONS if v[e]), None)
+
+
+def legal_vectors():
     """Every input combination the world can actually present.
 
     Enumerating all 2^n would manufacture races out of states that cannot
@@ -206,9 +211,10 @@ def legal_vectors(assume_neutral_without_face: bool = True):
       * exactly one Emotion at a time (declared in the Inputs table)
       * Yes and No are mutually exclusive (the detector scores the larger swing)
       * Attention implies Face -- attention is measured FROM a detected face
-      * no Face implies Neutral, because the live classifier forces neutral when
-        it has nothing to classify. Switch off with --no-neutral-invariant if
-        you would rather see those combinations.
+      * no Face implies NO emotion asserted -- all five at 0. Neutral is a
+        claim about a face that was looked at; with no face there is nothing to
+        claim. Reporting an absence as neutral is what let a rule saying
+        "Neutral == 1" fire when the person LEFT.
     """
     for face, att, yes, no in itertools.product((0, 1), repeat=4):
         if att and not face:
@@ -217,9 +223,8 @@ def legal_vectors(assume_neutral_without_face: bool = True):
             continue
         if (yes or no) and not face:
             continue          # a nod is detected from landmarks
-        for emo in EMOTIONS:
-            if assume_neutral_without_face and not face and emo != "Neutral":
-                continue
+        # with no face there is exactly one emotion vector: all zero
+        for emo in (EMOTIONS if face else [None]):
             v = {"Face": face, "Attention": att, "Yes": yes, "No": no}
             for e in EMOTIONS:
                 v[e] = int(e == emo)
@@ -336,7 +341,7 @@ def check_determinism(rep, states, transitions, vectors):
 
 
 def compact(v: dict) -> str:
-    emo = next(e for e in EMOTIONS if v[e])
+    emo = active_emotion(v) or "none"
     return (f"Face={v['Face']} Attention={v['Attention']} "
             f"Yes={v['Yes']} No={v['No']} Emotion={emo}")
 
@@ -408,17 +413,19 @@ def replay(path: Path, states, transitions, start, timing):
         emo_col = [r["state"] for r in rows]
     else:
         print("  ! this CSV has no 'state' column (recorded before affect "
-              "labelling); treating every frame as Neutral")
+              "labelling); frames with a face are treated as Neutral")
 
     def vector(i):
         face = int(np.isfinite(d["yaw"][i]))
         att = int(d["attending"][i] == 1) if np.isfinite(d["attending"][i]) else 0
-        emo = "Neutral"
+        emo = None
         if emo_col:
             raw = emo_col[i].strip().capitalize()
-            emo = raw if raw in EMOTIONS else "Neutral"
+            emo = raw if raw in EMOTIONS else None   # unknown / calibrating
+        elif face:
+            emo = "Neutral"          # take predates affect labelling
         if not face:
-            emo = "Neutral"
+            emo = None               # nothing seen, nothing asserted
         v = {"Face": face, "Attention": att,
              "Yes": int(nod[i]), "No": int(shake[i])}
         for e in EMOTIONS:
@@ -596,7 +603,7 @@ def plot_clashes(states, transitions, vectors, out: Path | None, title: str):
 
 
 def short(v: dict) -> str:
-    emo = next(e for e in EMOTIONS if v[e])
+    emo = active_emotion(v) or "none"
     return (f"{'F' if v['Face'] else '-'}{'A' if v['Attention'] else '-'}"
             f"{'Y' if v['Yes'] else '-'}{'N' if v['No'] else '-'} {emo[:4]}")
 
@@ -630,10 +637,10 @@ def plot_replay(res, states, transitions, out: Path | None, title: str):
     # five binary rows that can never overlap
     ey = len(rows)
     cur, start_i = None, 0
-    emo_seq = [next(e for e in EMOTIONS if v[e]) for v in vecs]
+    emo_seq = [active_emotion(v) for v in vecs]
     for i, e in enumerate(emo_seq + [None]):
         if e != cur:
-            if cur is not None:
+            if cur is not None and cur in EMO_COLOR:
                 a.axvspan(t[start_i], t[min(i, len(t) - 1)],
                           ymin=(ey + 0.12) / (ey + 1.0), ymax=(ey + 0.74) / (ey + 1.0),
                           color=EMO_COLOR[cur], alpha=.55, lw=0)
@@ -720,12 +727,10 @@ def main():
                     metavar="PNG",
                     help="draw the state x input clash grid from the exhaustive "
                          "pass; give a path to save, or pass bare for a window")
-    ap.add_argument("--no-neutral-invariant", action="store_true",
-                    help="allow non-neutral emotion while no face is present")
     args = ap.parse_args()
 
     inputs, aliases, states, states_rows, timing, transitions = load_tables(args.tables)
-    vectors = list(legal_vectors(not args.no_neutral_invariant))
+    vectors = list(legal_vectors())
     rep = Report()
 
     print(f"tables: {args.tables}")

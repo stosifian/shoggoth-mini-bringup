@@ -1,0 +1,11 @@
+State,Min Duration,Notes
+ALONE,-,-
+NOTICING,400ms,
+ENGAGED,700ms,
+NEUTRAL,-,-
+CONTENT,-,
+EXCITED,-,
+SAD,-,
+ANGRY,-,
+YES,600ms,However long it takes to finish motion
+NO,600ms,However long it takes to finish motion

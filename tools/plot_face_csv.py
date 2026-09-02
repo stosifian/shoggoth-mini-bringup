@@ -181,8 +181,12 @@ def detect_head_gestures(t, yaw, pitch, win=1.0, min_amp=8.0):
 
 # The 2x2 affect grid plus a neutral centre. Colour carries meaning here:
 # warm = high arousal, cool = low, saturated = strong valence either way.
-STATE_NAMES = ["neutral", "content", "excited", "sad", "angry"]
+STATE_NAMES = ["unknown", "neutral", "content", "excited", "sad", "angry"]
 STATE_COLORS = {
+    # 'unknown' is not a sixth quadrant, it is the absence of an observation:
+    # no face, so nothing to classify. Kept distinct from neutral because a
+    # rule reading "Neutral == 1" must not fire when someone left the room.
+    "unknown": "0.85",
     "neutral": "0.62",
     "content": "tab:green",       # low arousal, positive valence
     "excited": "gold",            # high arousal, positive valence
@@ -192,8 +196,8 @@ STATE_COLORS = {
 
 
 def classify_affect(arousal, valence, a_thresh=0.0, v_thresh=0.0,
-                    deadband=0.20, hyst=0.65):
-    """Label each frame with one of five affect states.
+                    deadband=0.20, hyst=0.65, have_face=None):
+    """Label each frame with an affect state, or 'unknown' where no face.
 
     Two independent sign tests, NOT a weighted sum of the two axes. Any single
     weighted combination projects the plane onto a line, which collides the
@@ -211,17 +215,28 @@ def classify_affect(arousal, valence, a_thresh=0.0, v_thresh=0.0,
     return at `deadband*hyst`) because without it a near-neutral face rattles
     between all four states, which is the circular version of the boundary
     chatter the attention threshold already showed.
+
+    `have_face` marks frames with no detection. Those are 'unknown', not
+    'neutral' -- neutral is a claim about a face that was looked at, and
+    conflating the two makes an absence indistinguishable from a calm person.
+    Baselines are computed only over frames that HAVE a face, so a take that is
+    mostly empty room does not drag the median toward whatever the affect
+    signals read as when there is nothing to read.
     """
-    a_base = float(np.nanmedian(arousal)) if np.isfinite(arousal).any() else 0.0
-    v_base = float(np.nanmedian(valence)) if np.isfinite(valence).any() else 0.0
+    if have_face is None:
+        have_face = np.ones(len(arousal), bool)
+    have_face = np.asarray(have_face, bool)
+    seen = have_face & np.isfinite(arousal) & np.isfinite(valence)
+    a_base = float(np.median(arousal[seen])) if seen.any() else 0.0
+    v_base = float(np.median(valence[seen])) if seen.any() else 0.0
     da, dv = arousal - a_base, valence - v_base
     radius = np.hypot(da, dv)
 
     out = np.full(len(arousal), "neutral", dtype=object)
     in_neutral = True
     for i in range(len(arousal)):
-        if not (np.isfinite(da[i]) and np.isfinite(dv[i])):
-            out[i], in_neutral = "neutral", True
+        if not have_face[i] or not (np.isfinite(da[i]) and np.isfinite(dv[i])):
+            out[i], in_neutral = "unknown", True
             continue
         # Harder to leave a state than to stay in it: hold neutral until the
         # radius clears `deadband`, then hold the quadrant until it falls back
@@ -287,7 +302,8 @@ def main():
 
     state, (a_base, v_base) = classify_affect(
         d["arousal"], d["valence"], a_thresh=args.a_thresh,
-        v_thresh=args.v_thresh, deadband=args.deadband)
+        v_thresh=args.v_thresh, deadband=args.deadband,
+        have_face=np.isfinite(d["yaw"]))
 
     fig, ax = plt.subplots(4, 1, figsize=(15, 13), sharex=True)
     title = (f"{args.csv.name} — {n} rows, {rate:.1f} Hz, "
