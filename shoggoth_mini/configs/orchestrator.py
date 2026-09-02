@@ -38,6 +38,17 @@ class OrchestratorConfig(BaseConfig):
     )
 
     # Visual Configuration
+    # Gaussian noise added to every cursor command inside the motion primitives.
+    # Upstream defaults to 0.010, which is ~41 ticks of sigma per motor and, taken
+    # over the many commands a session issues, reaches ~200 ticks in the tail —
+    # enough to push the deepest primitive past the encoder range and have it
+    # refused. Set to 0.0 for deterministic, repeatable motion while testing.
+    motion_noise_scale: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Cursor noise for motion primitives. 0 disables randomisation.",
+    )
+
     wave_detection_depth_z_max: float = Field(
         default=-0.40,
         description="Depth threshold for wave detection (Z distance)",

@@ -1,6 +1,7 @@
 """Main orchestrator application with async architecture."""
 
 import asyncio
+import functools
 import json
 import base64
 import time
@@ -383,22 +384,51 @@ class OrchestratorApp:
                         logger.info("Performing physical action: %s", action_str)
 
                         # Execute behavior using the refactored primitives
+                        # Pass the configured noise explicitly. execute_behavior
+                        # defaults to 0.010 and the orchestrator previously relied
+                        # on that default, so motion was randomised with no way to
+                        # turn it off short of editing the primitive.
                         motor_result = await asyncio.to_thread(
-                            execute_behavior, self.motor_controller, behavior
+                            functools.partial(
+                                execute_behavior,
+                                self.motor_controller,
+                                behavior,
+                                noise_scale=self.config.motion_noise_scale,
+                            )
                         )
 
-                        # Handle grab/release state management without string literals
-                        if behavior == MotionBehavior.GRAB:
+                        # execute_behavior catches its own exceptions and reports
+                        # failure in the returned dict rather than raising, so the
+                        # status has to be inspected. It previously was not: a
+                        # failed grab still set is_grabbing, and because idle
+                        # restart is gated on `not is_grabbing`, the robot went
+                        # permanently still while the model believed it was
+                        # holding something — recoverable only by a <release_object>
+                        # it had no reason to send.
+                        motor_ok = (
+                            isinstance(motor_result, dict)
+                            and motor_result.get("status") == "success"
+                        )
+                        if not motor_ok:
+                            logger.error(
+                                "Motion %s failed: %s",
+                                action_str,
+                                (motor_result or {}).get("message", "unknown error"),
+                            )
+
+                        if behavior == MotionBehavior.GRAB and motor_ok:
                             self.is_grabbing.set()
                             should_restart_idle = False
                             logger.info(
                                 "Holding grab position - idle motion will not restart"
                             )
                         elif behavior == MotionBehavior.RELEASE:
+                            # Cleared even on failure: release moves to neutral, so
+                            # a failed release must not strand the grab state.
                             self.is_grabbing.clear()
 
                         result = {
-                            "status": "success",
+                            "status": "success" if motor_ok else "error",
                             "action": action_str,
                             "motor_result": motor_result,
                         }

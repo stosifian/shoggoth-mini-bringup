@@ -1,3 +1,10 @@
+# Gaussian noise added to every cursor command inside the motion primitives.
+# Upstream leaves this at execute_behavior's 0.010 default, which is ~41 ticks of
+# sigma per motor; taken over the many commands a session issues it reaches ~200
+# ticks in the tail, enough to push the deepest primitive past the encoder range
+# and have it refused. 0.0 gives deterministic, repeatable motion.
+motion_noise_scale: 0.0
+
 orchestrator:
   # Audio Configuration
   audio_sample_rate: 16000

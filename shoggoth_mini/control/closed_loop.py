@@ -775,8 +775,38 @@ class ClosedLoopController:
                 tip_m, target_m, actuator_lengths
             )
 
-            # Execute action
-            self.motor_system.execute_action(action_2d_cursor)
+            # Execute action.
+            #
+            # Skip a frame rather than ending the session. Previously any
+            # exception here propagated out of the loop, through start(), and
+            # stopped tracking entirely — a single refused target or dropped bus
+            # write ended the run. Roughly 3% of position writes were measured to
+            # fail silently on this bus (2026-08-18), so transient failures are
+            # expected rather than exceptional.
+            #
+            # Deliberately NOT retried: the next frame computes a fresh action
+            # from fresh perception, which is better than re-issuing a stale one.
+            try:
+                self.motor_system.execute_action(action_2d_cursor)
+                self._consecutive_action_errors = 0
+            except Exception as exc:
+                self._consecutive_action_errors = getattr(
+                    self, "_consecutive_action_errors", 0) + 1
+                if self._consecutive_action_errors in (1, 10) or (
+                    self._consecutive_action_errors % 100 == 0
+                ):
+                    console.print(
+                        f"[yellow]Action failed "
+                        f"({self._consecutive_action_errors} consecutive): "
+                        f"{exc}[/yellow]"
+                    )
+                if self._consecutive_action_errors >= 200:
+                    console.print(
+                        "[red]200 consecutive action failures — stopping. "
+                        "This is not transient; check the calibration and the "
+                        "motor bus.[/red]"
+                    )
+                    raise
 
             if self.telemetry:
                 self.telemetry.log(

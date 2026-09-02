@@ -449,6 +449,7 @@ class IdleMotionLoop:
                 )
 
                 # Apply motor step limits
+                positions_before = dict(self._current_motor_positions)
                 final_targets_for_bus = {}
                 for motor_id_key in motor_keys:
                     current_pos_m = self._current_motor_positions[motor_id_key]
@@ -465,8 +466,36 @@ class IdleMotionLoop:
                     final_targets_for_bus[motor_id_key] = final_target_m
                     self._current_motor_positions[motor_id_key] = final_target_m
 
-                # Send motor commands
-                self.motor_controller.set_positions(final_targets_for_bus)
+                # Send motor commands.
+                #
+                # Survive a failed frame rather than dying. This loop runs in a
+                # thread, so an exception here killed the thread outright: idle
+                # motion stopped while the rest of the process carried on, which
+                # presents as "the robot went still", not as a crash. A refused
+                # out-of-range target, a dropped bus write or a transient serial
+                # error should cost one frame, not the whole behaviour.
+                #
+                # _current_motor_positions is rolled back on failure, because it
+                # was already advanced by the step limiter above; leaving it
+                # advanced would make the loop believe it had moved and compound
+                # the error on the next frame.
+                try:
+                    self.motor_controller.set_positions(final_targets_for_bus)
+                except Exception as exc:
+                    self._consecutive_errors = getattr(
+                        self, "_consecutive_errors", 0) + 1
+                    for k in motor_keys:
+                        self._current_motor_positions[k] = positions_before[k]
+                    if self._consecutive_errors in (1, 10) or (
+                        self._consecutive_errors % 100 == 0
+                    ):
+                        logger.warning(
+                            "Idle motion: command failed (%d consecutive): %s",
+                            self._consecutive_errors, exc,
+                        )
+                    time.sleep(dt_loop)
+                    continue
+                self._consecutive_errors = 0
 
                 actual_positions = self.motor_controller.get_positions()
                 if actual_positions:
