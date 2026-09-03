@@ -73,6 +73,12 @@
    "neutral",
    "neutral"
   ],
+  "channels_face_path": [
+   0.239998,
+   0.725799,
+   1.95,
+   0.657723
+  ],
   "fsm_blocked": 0,
   "fsm_lost": 0,
   "fsm_occupancy": {
@@ -239,6 +245,12 @@
    "neutral",
    "neutral",
    "neutral"
+  ],
+  "channels_face_path": [
+   0.239998,
+   0.725799,
+   1.95,
+   0.657723
   ],
   "fsm_blocked": 0,
   "fsm_lost": 0,

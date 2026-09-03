@@ -88,6 +88,23 @@ def capture():
         rec["attending_digest"] = digest(np.array(att, float))
         rec["attending_frames"] = int(sum(att))
 
+        # --- the FACE-PRESENT path -------------------------------------------
+        # Channels.update returns early when there is no face, so a fixture
+        # without one never reaches affect_from_blend. That gap hid a missing
+        # import through a whole refactor. Driving it with a synthetic
+        # detection covers the branch no recording here exercises.
+        from shoggoth_mini.affect import Channels
+        from shoggoth_mini.perception.face import FaceObs
+        obs = FaceObs(px=np.zeros((478, 2)),
+                      blend={"mouthSmileLeft": 0.8, "mouthSmileRight": 0.7,
+                             "eyeWideLeft": 0.3, "jawOpen": 0.2},
+                      yaw=5.0, pitch=-3.0, roll=1.0)
+        cch = Channels()
+        for k in range(40):
+            cch.update(0.05 * (k + 1), np.array([0.01, 0.10, 0.65]), obs)
+        rec["channels_face_path"] = [round(cch.arousal, 6), round(cch.valence, 6),
+                                     round(cch.dwell, 4), round(cch.distance, 6)]
+
         # --- affect from blendshapes (scalar grid, no take needed) ----------
         rec["affect_from_blend"] = [
             list(fp.affect_from_blend(b)) for b in (

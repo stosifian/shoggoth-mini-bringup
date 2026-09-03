@@ -15,7 +15,7 @@ from typing import Optional
 
 import numpy as np
 
-from .features import attending
+from .features import affect_from_blend, attending
 
 TRAIL_MAX = 90
 
