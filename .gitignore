@@ -58,6 +58,9 @@ data/
 MUJOCO_LOG.TXT
 exploration/__pycache__/
 exploration/out/
+# Regenerated in one command by exploration/tentacle_variants.py; the generator
+# is tracked, its output is not.
+exploration/assets/
 
 # ---------------------------------------------------------------------------
 # Private working notes. The public repo carries README.md (the build writeup)
@@ -83,9 +86,18 @@ exploration/MOTION_SPACE_NOTES.md
 # uninterpretable.
 diagnostics/
 
-# Next-phase design exploration — scratch tooling for a future form factor,
-# not part of this build.
-exploration/
+# exploration/ was ignored as "scratch tooling for a future form factor". It
+# stopped being scratch: face_probe.py holds the live affect estimation the
+# state machine consumes, and losing it would lose the authoritative
+# implementation. Tracked from 2026-09-03. Recordings under exploration/out/
+# Regenerated in one command by exploration/tentacle_variants.py; the generator
+# is tracked, its output is not.
+exploration/assets/
+# stay ignored -- see the out/ rule above.
+exploration/out/
+# Regenerated in one command by exploration/tentacle_variants.py; the generator
+# is tracked, its output is not.
+exploration/assets/
 
 # Perception and gesture recordings written by the exploration tools
 # (face_probe --csv, puppet's gesture takes). Same reasoning as diagnostics/:
