@@ -155,6 +155,40 @@ class FaceObs:
     fwd: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
 
+class Roi:
+    """Per-eye square crop that follows the face.
+
+    Two jobs. It keeps enough pixels ON the face for the detector to see it at
+    conversational range (see SEARCH_CROP), and once locked it tracks, so the
+    crop tightens as the person moves away instead of losing them. Each eye
+    needs its own: the same face sits at different x in the two views, which is
+    the whole basis of the stereo disparity.
+    """
+
+    def __init__(self, fw: int, fh: int, search: int = SEARCH_CROP):
+        self.fw, self.fh, self.search = fw, fh, search
+        self.reset()
+
+    def reset(self) -> None:
+        self.side = int(min(self.search, self.fw, self.fh))
+        self.x0 = (self.fw - self.side) // 2
+        self.y0 = (self.fh - self.side) // 2
+        self.locked = False
+
+    def crop(self, frame: np.ndarray) -> np.ndarray:
+        return frame[self.y0:self.y0 + self.side, self.x0:self.x0 + self.side]
+
+    def follow(self, px_full: np.ndarray) -> None:
+        lo, hi = px_full.min(axis=0), px_full.max(axis=0)
+        centre = (lo + hi) / 2.0
+        side = int(np.clip(float(np.max(hi - lo)) * ROI_MARGIN,
+                           ROI_MIN, min(self.fw, self.fh)))
+        self.side = side
+        self.x0 = int(np.clip(centre[0] - side / 2, 0, self.fw - side))
+        self.y0 = int(np.clip(centre[1] - side / 2, 0, self.fh - side))
+        self.locked = True
+
+
 def detect_face(frame: np.ndarray, roi: Optional[Roi] = None,
                 flip_yaw=False, flip_pitch=False) -> Optional[FaceObs]:
     """Detect in `roi`, falling back to a fresh search when the lock is lost."""
