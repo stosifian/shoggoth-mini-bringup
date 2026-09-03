@@ -50,226 +50,21 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent))     # the package, for shoggoth_mini.affect
+sys.path.insert(0, str(HERE.parent))     # the package
 
-ANY = "__ANY__"
-PREVIOUS = "Previous state"
-MIN_DURATION = "__MIN_DURATION__"
-
-# Curly quotes and non-breaking spaces come free with spreadsheet exports.
-_TIDY = {"“": '"', "”": '"', "‘": "'", "’": "'",
-         " ": " ", "–": "-", "—": "-"}
-
-
-def tidy(s: str) -> str:
-    for a, b in _TIDY.items():
-        s = s.replace(a, b)
-    return s.strip()
-
-
-# =============================================================================
-# parsing
-# =============================================================================
-@dataclass
-class Term:
-    """One `Input == value` clause, optionally with a hold duration."""
-    name: str
-    value: int
-    hold_s: float | None = None
-
-    def __str__(self):
-        d = f" for >{self.hold_s}s" if self.hold_s is not None else ""
-        return f"{self.name}=={self.value}{d}"
-
-
-@dataclass
-class Transition:
-    row: int
-    src_raw: str
-    sources: list[str]
-    dst: str
-    cond_raw: str
-    terms: list[Term]
-    special: str | None          # MIN_DURATION for the YES/NO return rows
-    priority: int | None
-    problems: list[str] = field(default_factory=list)
-
-    def label(self) -> str:
-        return f"row {self.row}: {self.src_raw} -> {self.dst}"
-
-
-_DUR = re.compile(r">\s*([\d.]+)\s*(seconds?|secs?|s|milliseconds?|ms)\b", re.I)
-_TERM = re.compile(r"\b([A-Za-z_][A-Za-z_ ]*?)\s*==\s*([01])\b")
-
-
-def parse_duration(text: str) -> float | None:
-    m = _DUR.search(text)
-    if not m:
-        return None
-    val, unit = float(m.group(1)), m.group(2).lower()
-    return val / 1000.0 if unit.startswith("m") else val
-
-
-def parse_condition(text: str) -> tuple[list[Term], str | None]:
-    """-> (terms, special). Conjunctions only; `&` and `and` are equivalent."""
-    text = tidy(text)
-    if not text:
-        return [], None
-    if "==" not in text:
-        # the YES/NO return rows: a trigger expressed in prose
-        if "min duration" in text.lower():
-            return [], MIN_DURATION
-        return [], "UNPARSED"
-
-    clauses = re.split(r"\s*&\s*|\s+and\s+", text, flags=re.I)
-    terms: list[Term] = []
-    for c in clauses:
-        m = _TERM.search(c)
-        if not m:
-            continue
-        terms.append(Term(m.group(1).strip(), int(m.group(2)), parse_duration(c)))
-    return terms, None
-
-
-# Words the condition grammar treats as prose. Whatever is left after the terms
-# and durations are consumed, minus these, is text the parser IGNORED -- which
-# is the failure mode that matters, because it is the silent one.
-_NOISE = {"for", "longer", "than", "is", "are", "being", "returned", "detected",
-          "seconds", "second", "secs", "sec", "s", "ms", "milliseconds", "and",
-          "the", "a", "of", "state", "machine", "was", "in", "before", "after",
-          "min", "duration", "return", "to", "landmarks", "on", "timeout",
-          "i.e", "e.g", "no", "face"}
-
-
-def audit_condition(text: str, terms: "list[Term]") -> list[str]:
-    """Tokens in the raw condition the parser did not account for.
-
-    The grammar is undocumented and the parser takes what it recognises, so the
-    real risk is not a syntax error -- those surface -- but a clause quietly
-    dropped. `A == 1 or B == 1` parses as `A == 1`: the split knows only `&` and
-    `and`, and _TERM.search returns the FIRST match in a clause. A row like that
-    would be checked, drawn and executed as something narrower than written,
-    with nothing anywhere saying so.
-    """
-    t = tidy(text)
-    for term in terms:
-        t = re.sub(re.escape(term.name) + r"\s*==\s*[01]", " ", t)
-    t = _DUR.sub(" ", t)
-    t = re.sub(r"[(),.;:>&/\-]", " ", t)
-    return [w for w in t.split()
-            if w.lower() not in _NOISE and not w.replace(".", "").isdigit()]
-
-
-def expand_sources(raw: str, states: list[str]) -> list[str]:
-    """`Any except A, B` -> every state but A and B. `Any` -> all."""
-    t = tidy(raw)
-    low = t.lower()
-    if not low.startswith("any"):
-        return [t]
-    if "except" not in low:
-        return list(states)
-    excl_raw = t[low.index("except") + len("except"):]
-    excluded = {e.strip() for e in excl_raw.split(",") if e.strip()}
-    return [s for s in states if s not in excluded]
-
-
-def read_csv_rows(path: Path) -> list[dict]:
-    with open(path, newline="", encoding="utf-8-sig") as fh:
-        return [{tidy(k): tidy(v or "") for k, v in row.items() if k}
-                for row in csv.DictReader(fh)]
-
-
-def load_tables(d: Path):
-    def one(prefix):
-        hits = sorted(d.glob(f"{prefix}*.csv"))
-        if not hits:
-            sys.exit(f"no {prefix}*.csv in {d}")
-        return read_csv_rows(hits[0])
-
-    inputs_rows = one("Inputs")
-    states_rows = one("States")
-    timing_rows = one("Timing")
-    trans_rows = one("Transitions")
-
-    # "Emotion: Content" is declared with a prefix but referenced bare.
-    inputs, aliases = [], {}
-    for r in inputs_rows:
-        name = r.get("Inputs") or next(iter(r.values()))
-        inputs.append(name)
-        aliases[name] = name
-        if ":" in name:
-            aliases[name.split(":", 1)[1].strip()] = name
-    states = [r["State"] for r in states_rows if r.get("State")]
-
-    timing = {}
-    for r in timing_rows:
-        if r.get("State"):
-            timing[r["State"]] = r.get("Min Duration", "")
-
-    transitions = []
-    for i, r in enumerate(trans_rows, start=2):     # row 1 is the header
-        src_raw = r.get("From", "")
-        dst = r.get("-> To") or r.get("To") or ""
-        cond = r.get("Conditions", "")
-        pr = r.get("Priority", "")
-        terms, special = parse_condition(cond)
-        transitions.append(Transition(
-            row=i, src_raw=src_raw, sources=expand_sources(src_raw, states),
-            dst=tidy(dst), cond_raw=cond, terms=terms, special=special,
-            priority=int(pr) if pr.strip().isdigit() else None))
-
-    return inputs, aliases, states, states_rows, timing, transitions
-
+# The machine itself lives in the library so the checker and the orchestrator
+# run the SAME state machine rather than two that are meant to agree. Everything
+# below is checking and drawing -- no rules.
+from shoggoth_mini.affect.fsm import (BOOLS, EMOTIONS, MIN_DURATION,  # noqa: E402
+                                      PREVIOUS, Machine, Term, Transition,
+                                      active_emotion, audit_condition,
+                                      legal_vectors, load_tables, min_dur,
+                                      parse_condition, run_vectors, satisfied,
+                                      tidy, to_mermaid)
 
 # =============================================================================
 # input space
 # =============================================================================
-EMOTIONS = ["Neutral", "Content", "Excited", "Sad", "Angry"]
-BOOLS = ["Face", "Attention", "Yes", "No"]
-
-
-def active_emotion(v: dict) -> str | None:
-    """Which emotion is asserted, or None when no face was seen."""
-    return next((e for e in EMOTIONS if v[e]), None)
-
-
-def legal_vectors():
-    """Every input combination the world can actually present.
-
-    Enumerating all 2^n would manufacture races out of states that cannot
-    coexist, so the declared invariants are applied as filters:
-      * exactly one Emotion at a time (declared in the Inputs table)
-      * Yes and No are mutually exclusive (the detector scores the larger swing)
-      * Attention implies Face -- attention is measured FROM a detected face
-      * no Face implies NO emotion asserted -- all five at 0. Neutral is a
-        claim about a face that was looked at; with no face there is nothing to
-        claim. Reporting an absence as neutral is what let a rule saying
-        "Neutral == 1" fire when the person LEFT.
-    """
-    for face, att, yes, no in itertools.product((0, 1), repeat=4):
-        if att and not face:
-            continue
-        if yes and no:
-            continue
-        if (yes or no) and not face:
-            continue          # a nod is detected from landmarks
-        # with no face there is exactly one emotion vector: all zero
-        for emo in (EMOTIONS if face else [None]):
-            v = {"Face": face, "Attention": att, "Yes": yes, "No": no}
-            for e in EMOTIONS:
-                v[e] = int(e == emo)
-            yield v
-
-
-def satisfied(t: Transition, v: dict) -> bool:
-    """Worst-case: any hold timer that could be mature is assumed mature."""
-    if t.special == MIN_DURATION:
-        return True                       # min duration always eventually elapses
-    if t.special == "UNPARSED" or not t.terms:
-        return False
-    return all(v.get(term.name) == term.value for term in t.terms)
-
-
 # =============================================================================
 # checks
 # =============================================================================
@@ -435,12 +230,17 @@ def check_reachability(rep, states, transitions, vectors, start):
 # =============================================================================
 # replay against a real recording
 # =============================================================================
-def replay(path: Path, states, transitions, start, timing):
+def face_csv_to_vectors(path: Path):
+    """Decode a face_probe recording into the machine's input vectors.
+
+    This is the tool's job, not the library's: the machine should not know what
+    a CSV is. The orchestrator will build the same vectors from live perception,
+    which is what makes the two comparable.
+    """
     import numpy as np
     from plot_face_csv import load as load_face
     from shoggoth_mini.affect import detect_head_gestures
 
-    print(f"\n=== REPLAY: {path.name} ===")
     d = load_face(path)
     t = d["t"]
     nod, shake = detect_head_gestures(t, d["yaw"], d["pitch"])
@@ -450,32 +250,37 @@ def replay(path: Path, states, transitions, start, timing):
         rows = list(csv.DictReader(fh))
     if rows and "state" in rows[0]:
         emo_col = [r["state"] for r in rows]
-    else:
-        print("  ! this CSV has no 'state' column (recorded before affect "
-              "labelling); frames with a face are treated as Neutral")
 
-    def vector(i):
+    vecs = []
+    for i in range(len(t)):
         face = int(np.isfinite(d["yaw"][i]))
         att = int(d["attending"][i] == 1) if np.isfinite(d["attending"][i]) else 0
         emo = None
         if emo_col:
             raw = emo_col[i].strip().capitalize()
-            emo = raw if raw in EMOTIONS else None   # unknown / calibrating
+            emo = raw if raw in EMOTIONS else None    # unknown / calibrating
         elif face:
-            emo = "Neutral"          # take predates affect labelling
+            emo = "Neutral"                # take predates affect labelling
         if not face:
-            emo = None               # nothing seen, nothing asserted
+            emo = None                     # nothing seen, nothing asserted
         v = {"Face": face, "Attention": att,
              "Yes": int(nod[i]), "No": int(shake[i])}
         for e in EMOTIONS:
             v[e] = int(e == emo)
-        return v
+        vecs.append(v)
+    return t, vecs, (emo_col is not None)
+
+
+def replay(path: Path, states, transitions, start, timing):
+    print(f"\n=== REPLAY: {path.name} ===")
+    t, vecs, had_states = face_csv_to_vectors(path)
+    if not had_states:
+        print("  ! this CSV has no 'state' column (recorded before affect "
+              "labelling); frames with a face are treated as Neutral")
 
     # Input coverage FIRST. A replay that never leaves the start state is
     # ambiguous -- it can mean the machine is wrong, or that the recording never
-    # contained the inputs needed to leave. Reporting what the take actually
-    # holds tells the two apart without a second investigation.
-    vecs = [vector(i) for i in range(len(t))]
+    # contained the inputs needed to leave.
     print("  input coverage:")
     for k in BOOLS + EMOTIONS:
         n = sum(v[k] for v in vecs)
@@ -485,74 +290,28 @@ def replay(path: Path, states, transitions, start, timing):
         print("  ! no frame in this recording contains a face, so the machine "
               "cannot leave ALONE. This take cannot validate the table.")
 
-    # real hold timers this time, not the worst-case abstraction
-    held = {}
-    prev_v = None
-    cur, entered, prev_state = start, t[0], None
-    occupancy = {s: 0.0 for s in states}
-    log, blocked, lost, trace = [], [], [], []
-
-    for i in range(len(t)):
-        v = vector(i)
-        for k, val in v.items():
-            if prev_v is None or prev_v.get(k) != val:
-                held[k] = t[i]
-        prev_v = v
-
-        def ok(tr):
-            if tr.special == MIN_DURATION:
-                return (t[i] - entered) >= min_dur(timing, cur)
-            if not tr.terms:
-                return False
-            for term in tr.terms:
-                if v.get(term.name) != term.value:
-                    return False
-                if term.hold_s and (t[i] - held.get(term.name, t[i])) < term.hold_s:
-                    return False
-            return True
-
-        firing = [tr for tr in transitions
-                  if cur in tr.sources and tr.dst != cur and ok(tr)]
-        if firing and (t[i] - entered) < min_dur(timing, cur):
-            # satisfied, but the state has not served its minimum. Worth
-            # surfacing: a transition that is repeatedly blocked here is a
-            # min-duration that is too long, and it looks identical to a
-            # condition that never satisfies unless you record it separately.
-            blocked.append((t[i], cur, firing[0].dst, firing[0].row))
-        elif firing:
-            firing.sort(key=lambda x: x.priority if x.priority is not None else 99)
-            win = firing[0]
-            if len(firing) > 1:
-                lost.append((t[i], cur, [x.row for x in firing[1:]]))
-            dst = prev_state if win.dst == PREVIOUS else win.dst
-            dst = dst or start
-            log.append((t[i], cur, dst, win.row))
-            prev_state, cur, entered = cur, dst, t[i]
-        trace.append(cur)
-        dt = (t[i + 1] - t[i]) if i + 1 < len(t) else 0.0
-        occupancy[cur] += dt
-
-    total = sum(occupancy.values()) or 1.0
+    res = run_vectors(t, vecs, states, transitions, timing, start)
+    total = sum(res["occupancy"].values()) or 1.0
+    log = res["log"]
     print(f"  {len(t)} frames, {t[-1]-t[0]:.1f}s, "
           f"{len(log)} transitions ({len(log)/max(t[-1]-t[0],1e-9):.2f}/s)")
     print("  occupancy:")
-    for s in states:
-        pct = 100 * occupancy[s] / total
+    for s_ in states:
+        pct = 100 * res["occupancy"][s_] / total
         bar = "#" * int(pct / 2)
-        flag = "" if occupancy[s] > 0 else "   <- never entered"
-        print(f"    {s:9} {pct:5.1f}%  {bar}{flag}")
+        flag = "" if res["occupancy"][s_] > 0 else "   <- never entered"
+        print(f"    {s_:9} {pct:5.1f}%  {bar}{flag}")
     if log:
         print("  first transitions:")
         for ts, a, b, row in log[:12]:
             print(f"    {ts:7.2f}s  {a:9} -> {b:9}  (row {row})")
-    if blocked:
-        print(f"  {len(blocked)} frame(s) where a transition was satisfied but "
-              f"held back by min duration")
-    if lost:
-        print(f"  {len(lost)} frame(s) where more than one transition fired and "
-              f"priority picked the winner")
-    return dict(t=t, vecs=vecs, trace=trace, log=log, blocked=blocked,
-                lost=lost, occupancy=occupancy)
+    if res["blocked"]:
+        print(f"  {len(res['blocked'])} frame(s) where a transition was "
+              f"satisfied but held back by min duration")
+    if res["lost"]:
+        print(f"  {len(res['lost'])} frame(s) where more than one transition "
+              f"fired and priority picked the winner")
+    return res
 
 
 EMO_COLOR = {"Neutral": "0.62", "Content": "tab:green", "Excited": "gold",
@@ -739,71 +498,6 @@ def plot_replay(res, states, transitions, out: Path | None, title: str):
         plt.show()
 
 
-def to_mermaid(states, states_rows, transitions, timing, fired=None) -> str:
-    """Mermaid state diagram, emitted from the PARSED table.
-
-    Generated from the same Transition objects the checker evaluates and the
-    replay executes, so it cannot describe a machine other than the one that
-    runs. A diagram drawn by hand from the CSV is a second reading of the tables
-    and can be wrong in ways nobody notices; this one is wrong only if the
-    parser is, and the parser is what everything else already trusts.
-
-    Multi-source rows ("Any except ...") would otherwise draw one edge per state
-    and bury the graph -- 50 edges from 22 rows. They come out of a single ANY
-    node instead, which keeps the deliberate transitions readable while still
-    showing the fallbacks exist.
-
-    `fired` maps row -> count from a replay; when given, every edge carries how
-    often it actually fired, so the unexercised parts of the table are visible.
-    """
-    body = {r["State"]: (r.get("Body") or "").strip() for r in states_rows}
-    out = ["stateDiagram-v2", "    direction LR"]
-
-    for st in states:
-        b = body.get(st, "")
-        b = b.replace("Play ", "").replace(" motion primitive", "")
-        b = b.replace(" motion", "").replace('"', "").strip()
-        md = min_dur(timing, st)
-        extra = ""
-        if md:
-            extra = f" [min {md*1000:.0f}ms]" if md < 1 else f" [min {md:.1f}s]"
-        if b or extra:
-            out.append(f"    {st}: {b}{extra}")
-
-    out.append(f"    [*] --> {states[0]}")
-    has_any = has_prev = False
-    for t in transitions:
-        cond = tidy(t.cond_raw).replace(":", " ").replace('"', "'")
-        cond = (cond[:52] + "...") if len(cond) > 55 else cond
-        tag = f"r{t.row}" + (f" p{t.priority}" if t.priority is not None else "")
-        if fired is not None:
-            tag += f" x{fired.get(t.row, 0)}"
-        dst = t.dst
-        if dst == PREVIOUS:
-            dst, has_prev = "PREV", True
-        src = t.sources[0]
-        if len(t.sources) > 1:
-            src, has_any = "ANY", True
-        out.append(f"    {src} --> {dst}: {tag} - {cond}")
-    if has_any:
-        out.append("    ANY: any state, see the row for its exclusions")
-    if has_prev:
-        out.append("    PREV: whichever state it came from")
-    return "\n".join(out) + "\n"
-
-
-def min_dur(timing, state) -> float:
-    raw = tidy(timing.get(state, "")).lower()
-    if not raw or raw == "-":
-        return 0.0
-    m = re.match(r"([\d.]+)\s*(ms|s|seconds?)?", raw)
-    if not m:
-        return 0.0
-    val = float(m.group(1))
-    return val / 1000.0 if (m.group(2) or "").startswith("m") else val
-
-
-# =============================================================================
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)

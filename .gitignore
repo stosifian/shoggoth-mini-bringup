@@ -114,3 +114,6 @@ out/
 # writeup depends on. Adding a new one would then fail silently.
 /*.png
 /*.numbers
+
+# scratch goldens written during a comparison; the kept ones are named
+verify/_*.json
