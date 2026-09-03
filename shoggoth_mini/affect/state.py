@@ -28,6 +28,15 @@ def quadrant(da: float, dv: float, in_neutral: bool,
 
     Pure: no buffers, no timestamps, no arrays. Scalars in, answer out.
 
+    A non-finite input yields 'unknown'. That guard lives HERE, in the rule,
+    rather than in either driver, because it is a precondition of the rule --
+    put it in the callers and each one has to remember it. One did not: the
+    streaming path checked only whether a face was present, so a frame with a
+    face but NaN blendshapes returned 'sad'. NaN fails every comparison, so it
+    escaped the neutral radius test and fell into the (False, False) quadrant,
+    and the robot would have mirrored sadness at someone whose expression it
+    could not read.
+
     Two independent sign tests, NOT a weighted sum of the two axes. Any single
     weighted combination projects the plane onto a line, which collides the
     diagonally opposite quadrants: with equal weights, angry (+arousal,
@@ -40,6 +49,8 @@ def quadrant(da: float, dv: float, in_neutral: bool,
     those two makes the deadband easier to escape than to re-enter, which
     produces MORE chatter, not less (measured: 44 flips against 8).
     """
+    if not (np.isfinite(da) and np.isfinite(dv)):
+        return "unknown", True
     bar = cfg.deadband if in_neutral else cfg.deadband * cfg.deadband_hyst
     if float(np.hypot(da, dv)) < bar:
         return "neutral", True

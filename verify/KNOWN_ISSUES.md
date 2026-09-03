@@ -9,7 +9,15 @@ Reproduce anything here with `tools/affect_golden.py`.
 
 ---
 
-## 1. A face with unusable affect is labelled `sad` on the live path
+## 1. ~~A face with unusable affect is labelled `sad` on the live path~~ FIXED
+
+Fixed 2026-09-03. The finiteness guard now lives inside `quadrant()`, so it
+applies to every driver and no future one can omit it. Both paths return
+`unknown`. Golden is unchanged, because neither test take contains a frame with
+a face and non-finite affect -- the bug was real but unexercised by the fixtures,
+which is exactly the kind a golden cannot catch on its own.
+
+Original report follows.
 
 **Severity: real.** Silent, and it invents an emotion out of missing data.
 
