@@ -1,0 +1,37 @@
+stateDiagram-v2
+    direction LR
+    ALONE: slow_breathe
+    NOTICING: normal_breathe [min 400ms]
+    ENGAGED: slow_circle [min 700ms]
+    NEUTRAL: side_side (not yet defined)
+    CONTENT: wave_packet_am
+    EXCITED: wave_packet_fm
+    SAD: grab_object
+    ANGRY: grab_object
+    YES: yes + yes sound [min 600ms]
+    NO: no + no sound [min 600ms]
+    [*] --> ALONE
+    ALONE --> NOTICING: r2 p3 x1 - Face == 1 > 1 second
+    NOTICING --> ENGAGED: r3 p3 x2 - Attention == 1 for > 1.5 seconds
+    ENGAGED --> NEUTRAL: r4 p3 x2 - Neutral == 1 for > 1 second
+    ENGAGED --> CONTENT: r5 p3 x0 - Content == 1 for > 1.5 seconds
+    ENGAGED --> EXCITED: r6 p3 x0 - Excited == 1 for > 1.5 seconds
+    ENGAGED --> SAD: r7 p3 x0 - Sad == 1 for > 1.5 seconds
+    ENGAGED --> ANGRY: r8 p3 x0 - Angry == 1 for > 1.5 seconds
+    NEUTRAL --> CONTENT: r9 p3 x0 - Content == 1 for > 1.5 seconds & Face == 1
+    NEUTRAL --> EXCITED: r10 p3 x0 - Excited == 1 for > 1.5 seconds & Face == 1
+    NEUTRAL --> SAD: r11 p3 x0 - Sad == 1 for > 1.5 seconds & Face == 1
+    NEUTRAL --> ANGRY: r12 p3 x0 - Angry == 1 for > 1.5 seconds & Face == 1
+    CONTENT --> EXCITED: r13 p3 x0 - Excited == 1 for > 1 second & Face == 1
+    EXCITED --> NEUTRAL: r14 p3 x0 - Neutral == 1 for > 1 second & Face == 1
+    CONTENT --> NEUTRAL: r15 p3 x0 - Neutral == 1 for > 1 second & Face == 1
+    SAD --> NEUTRAL: r16 p3 x0 - Neutral == 1 for > 1 second & Face == 1
+    ANGRY --> NEUTRAL: r17 p3 x0 - Neutral == 1 for > 1 second & Face == 1
+    ANY --> YES: r18 p1 x1 - Yes == 1 for > 500 ms
+    ANY --> NO: r19 p1 x0 - No == 1 is detected for > 500 ms
+    YES --> PREV: r20 p3 x1 - Return to state machine was in before YES after min ...
+    NO --> PREV: r21 p3 x0 - Return to state machine was in before NO after min d...
+    ANY --> ALONE: r22 p2 x0 - Face == 0 for > 1.5 seconds
+    ANY --> NOTICING: r23 p2 x2 - Face == 1 > 1.5 seconds and Attention == 0 for > 1.5...
+    ANY: any state, see the row for its exclusions
+    PREV: whichever state it came from

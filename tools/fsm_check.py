@@ -131,6 +131,35 @@ def parse_condition(text: str) -> tuple[list[Term], str | None]:
     return terms, None
 
 
+# Words the condition grammar treats as prose. Whatever is left after the terms
+# and durations are consumed, minus these, is text the parser IGNORED -- which
+# is the failure mode that matters, because it is the silent one.
+_NOISE = {"for", "longer", "than", "is", "are", "being", "returned", "detected",
+          "seconds", "second", "secs", "sec", "s", "ms", "milliseconds", "and",
+          "the", "a", "of", "state", "machine", "was", "in", "before", "after",
+          "min", "duration", "return", "to", "landmarks", "on", "timeout",
+          "i.e", "e.g", "no", "face"}
+
+
+def audit_condition(text: str, terms: "list[Term]") -> list[str]:
+    """Tokens in the raw condition the parser did not account for.
+
+    The grammar is undocumented and the parser takes what it recognises, so the
+    real risk is not a syntax error -- those surface -- but a clause quietly
+    dropped. `A == 1 or B == 1` parses as `A == 1`: the split knows only `&` and
+    `and`, and _TERM.search returns the FIRST match in a clause. A row like that
+    would be checked, drawn and executed as something narrower than written,
+    with nothing anywhere saying so.
+    """
+    t = tidy(text)
+    for term in terms:
+        t = re.sub(re.escape(term.name) + r"\s*==\s*[01]", " ", t)
+    t = _DUR.sub(" ", t)
+    t = re.sub(r"[(),.;:>&/\-]", " ", t)
+    return [w for w in t.split()
+            if w.lower() not in _NOISE and not w.replace(".", "").isdigit()]
+
+
 def expand_sources(raw: str, states: list[str]) -> list[str]:
     """`Any except A, B` -> every state but A and B. `Any` -> all."""
     t = tidy(raw)
@@ -275,6 +304,14 @@ def check_static(rep, inputs, aliases, states, states_rows, timing, transitions)
                         f"(declared: {', '.join(sorted(aliases))})")
         if t.priority is None:
             rep.warn(f"{t.label()}: no priority set")
+        if re.search(r"\bor\b", t.cond_raw, re.I):
+            rep.err(f"{t.label()}: the grammar has no OR, so "
+                    f"'{t.cond_raw}' would silently parse as something "
+                    f"narrower. Split it into two rows.")
+        leftover = audit_condition(t.cond_raw, t.terms)
+        if leftover and t.special is None:
+            rep.warn(f"{t.label()}: parser IGNORED {leftover} in "
+                     f"'{t.cond_raw}'")
         if t.dst in t.sources and len(t.sources) > 1:
             rep.warn(f"{t.label()}: '{t.dst}' is in its own source set "
                      f"(self-transition)")
@@ -702,6 +739,59 @@ def plot_replay(res, states, transitions, out: Path | None, title: str):
         plt.show()
 
 
+def to_mermaid(states, states_rows, transitions, timing, fired=None) -> str:
+    """Mermaid state diagram, emitted from the PARSED table.
+
+    Generated from the same Transition objects the checker evaluates and the
+    replay executes, so it cannot describe a machine other than the one that
+    runs. A diagram drawn by hand from the CSV is a second reading of the tables
+    and can be wrong in ways nobody notices; this one is wrong only if the
+    parser is, and the parser is what everything else already trusts.
+
+    Multi-source rows ("Any except ...") would otherwise draw one edge per state
+    and bury the graph -- 50 edges from 22 rows. They come out of a single ANY
+    node instead, which keeps the deliberate transitions readable while still
+    showing the fallbacks exist.
+
+    `fired` maps row -> count from a replay; when given, every edge carries how
+    often it actually fired, so the unexercised parts of the table are visible.
+    """
+    body = {r["State"]: (r.get("Body") or "").strip() for r in states_rows}
+    out = ["stateDiagram-v2", "    direction LR"]
+
+    for st in states:
+        b = body.get(st, "")
+        b = b.replace("Play ", "").replace(" motion primitive", "")
+        b = b.replace(" motion", "").replace('"', "").strip()
+        md = min_dur(timing, st)
+        extra = ""
+        if md:
+            extra = f" [min {md*1000:.0f}ms]" if md < 1 else f" [min {md:.1f}s]"
+        if b or extra:
+            out.append(f"    {st}: {b}{extra}")
+
+    out.append(f"    [*] --> {states[0]}")
+    has_any = has_prev = False
+    for t in transitions:
+        cond = tidy(t.cond_raw).replace(":", " ").replace('"', "'")
+        cond = (cond[:52] + "...") if len(cond) > 55 else cond
+        tag = f"r{t.row}" + (f" p{t.priority}" if t.priority is not None else "")
+        if fired is not None:
+            tag += f" x{fired.get(t.row, 0)}"
+        dst = t.dst
+        if dst == PREVIOUS:
+            dst, has_prev = "PREV", True
+        src = t.sources[0]
+        if len(t.sources) > 1:
+            src, has_any = "ANY", True
+        out.append(f"    {src} --> {dst}: {tag} - {cond}")
+    if has_any:
+        out.append("    ANY: any state, see the row for its exclusions")
+    if has_prev:
+        out.append("    PREV: whichever state it came from")
+    return "\n".join(out) + "\n"
+
+
 def min_dur(timing, state) -> float:
     raw = tidy(timing.get(state, "")).lower()
     if not raw or raw == "-":
@@ -725,6 +815,9 @@ def main():
                     metavar="PNG",
                     help="draw the replay as a timing diagram; give a path to "
                          "save, or pass bare to open a window")
+    ap.add_argument("--diagram", type=Path, default=None, metavar="MMD",
+                    help="write a mermaid state diagram generated from the "
+                         "parsed table; with --replay, edges carry fire counts")
     ap.add_argument("--clash-map", nargs="?", const="SHOW", default=None,
                     metavar="PNG",
                     help="draw the state x input clash grid from the exhaustive "
@@ -745,6 +838,17 @@ def main():
         rep.err(f"start state '{args.start}' is not declared")
     else:
         check_reachability(rep, states, transitions, vectors, args.start)
+
+    if args.diagram:
+        fired = None
+        if args.replay:
+            r = replay(args.replay, states, transitions, args.start, timing)
+            fired = {t.row: 0 for t in transitions}
+            for _, _, _, row in r["log"]:
+                fired[row] = fired.get(row, 0) + 1
+        args.diagram.write_text(
+            to_mermaid(states, states_rows, transitions, timing, fired))
+        print(f"\n=== DIAGRAM ===\n  -> {args.diagram}")
 
     if args.clash_map:
         out = None if args.clash_map == "SHOW" else Path(args.clash_map)
