@@ -66,6 +66,13 @@ from shoggoth_mini.perception.stereo import (                      # noqa: E402
     triangulate_points,
 )
 from shoggoth_mini.configs import get_perception_config            # noqa: E402
+from shoggoth_mini.affect import (ATTEND_PITCH_DEG, ATTEND_YAW_DEG,  # noqa: E402
+                                  BLENDSHAPE_WEIGHTS, STATE_BGR, AffectState,
+                                  affect_from_blend, attending, head_angles)
+from shoggoth_mini.affect.config import (BASELINE_MIN_S,  # noqa: E402
+                                         BASELINE_WINDOW_S, DEADBAND,
+                                         DEADBAND_HYST, STATE_QUADRANT,
+                                         A_THRESH, V_THRESH)
 
 MODEL_PATH = PKG / "assets" / "models" / "vision" / "face_landmarker.task"
 
@@ -98,44 +105,6 @@ FACE_LIMITS = {"X": {"clip_min": -3.0, "clip_max": 3.0},
                "Y": {"clip_min": -3.0, "clip_max": 3.0},
                "Z": {"clip_min": -3.0, "clip_max": 3.0}}
 
-# Blendshape -> affect. A STARTING GUESS, deliberately legible and tunable
-# rather than learned: these are facial GEOMETRY activations, and the step from
-# geometry to emotion is an interpretation that belongs in the appraisal layer
-# where it can be tuned by hand. Single-frame categorical emotion recognition is
-# unreliable in the wild anyway; what earns its keep here is CHANGE over time.
-BLENDSHAPE_WEIGHTS = {
-    "valence": {"mouthSmileLeft": +1.0, "mouthSmileRight": +1.0,
-                "cheekSquintLeft": +0.5, "cheekSquintRight": +0.5,
-                "mouthFrownLeft": -1.0, "mouthFrownRight": -1.0,
-                "browDownLeft": -0.6, "browDownRight": -0.6},
-    "arousal": {"eyeWideLeft": +0.8, "eyeWideRight": +0.8,
-                "browInnerUp": +0.7,
-                "browOuterUpLeft": +0.5, "browOuterUpRight": +0.5,
-                "jawOpen": +0.6,
-                "mouthStretchLeft": +0.3, "mouthStretchRight": +0.3},
-}
-
-ATTEND_YAW_DEG = 25.0       # within this of head-on counts as "looking at it"
-ATTEND_PITCH_DEG = 20.0
-
-# Affect state. Must match classify_affect() in tools/plot_face_csv.py, so a
-# take labelled live and the same take replotted afterwards agree.
-A_THRESH = 0.0              # high/low arousal split, relative to baseline
-V_THRESH = 0.0              # positive/negative valence split, same
-DEADBAND = 0.20             # radius from baseline inside which state is neutral
-DEADBAND_HYST = 0.65        # leave neutral at DEADBAND, return at 0.65 x that
-BASELINE_WINDOW_S = 20.0    # running median window
-BASELINE_MIN_S = 2.0        # below this the baseline is not worth trusting
-
-STATE_QUADRANT = {(False, True): "content", (True, True): "excited",
-                  (False, False): "sad", (True, False): "angry"}
-# BGR, to match the plotter's palette: warm = high arousal, cool = low
-STATE_BGR = {"neutral": (158, 158, 158), "content": (120, 180, 100),
-             "excited": (0, 215, 255), "sad": (180, 119, 31),
-             "angry": (40, 39, 214), "calibrating": (110, 110, 110),
-             # deliberately dimmer than neutral's grey: "nobody there" and
-             # "calm person" must not look the same at a glance
-             "unknown": (78, 78, 78)}
 IPD_NOMINAL_M = 0.063
 TRAIL_MAX = 90
 
@@ -186,55 +155,6 @@ class FaceObs:
     fwd: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
 
-def head_angles(matrix: np.ndarray) -> tuple[float, float, float, np.ndarray]:
-    """Yaw/pitch/roll (deg) + forward axis from the 4x4 facial transform.
-
-    Derived from the rotation's third column rather than a full Euler
-    decomposition: we only need a pointing direction, and a forward vector
-    degrades gracefully near gimbal configurations where Euler angles do not.
-    """
-    R = np.asarray(matrix, float)[:3, :3]
-    fwd = R[:, 2]
-    yaw = float(np.degrees(np.arctan2(fwd[0], abs(fwd[2]) + 1e-9)))
-    pitch = float(np.degrees(np.arcsin(np.clip(-fwd[1], -1.0, 1.0))))
-    roll = float(np.degrees(np.arctan2(R[1, 0], R[0, 0])))
-    return yaw, pitch, roll, fwd
-
-
-class Roi:
-    """Per-eye square crop that follows the face.
-
-    Two jobs. It keeps enough pixels ON the face for the detector to see it at
-    conversational range (see SEARCH_CROP), and once locked it tracks, so the
-    crop tightens as the person moves away instead of losing them. Each eye
-    needs its own: the same face sits at different x in the two views, which is
-    the whole basis of the stereo disparity.
-    """
-
-    def __init__(self, fw: int, fh: int, search: int = SEARCH_CROP):
-        self.fw, self.fh, self.search = fw, fh, search
-        self.reset()
-
-    def reset(self) -> None:
-        self.side = int(min(self.search, self.fw, self.fh))
-        self.x0 = (self.fw - self.side) // 2
-        self.y0 = (self.fh - self.side) // 2
-        self.locked = False
-
-    def crop(self, frame: np.ndarray) -> np.ndarray:
-        return frame[self.y0:self.y0 + self.side, self.x0:self.x0 + self.side]
-
-    def follow(self, px_full: np.ndarray) -> None:
-        lo, hi = px_full.min(axis=0), px_full.max(axis=0)
-        centre = (lo + hi) / 2.0
-        side = int(np.clip(float(np.max(hi - lo)) * ROI_MARGIN,
-                           ROI_MIN, min(self.fw, self.fh)))
-        self.side = side
-        self.x0 = int(np.clip(centre[0] - side / 2, 0, self.fw - side))
-        self.y0 = int(np.clip(centre[1] - side / 2, 0, self.fh - side))
-        self.locked = True
-
-
 def detect_face(frame: np.ndarray, roi: Optional[Roi] = None,
                 flip_yaw=False, flip_pitch=False) -> Optional[FaceObs]:
     """Detect in `roi`, falling back to a fresh search when the lock is lost."""
@@ -273,84 +193,9 @@ def detect_face(frame: np.ndarray, roi: Optional[Roi] = None,
     return obs
 
 
-def affect_from_blend(blend: dict) -> tuple[float, float]:
-    """Weighted blendshape sums -> (arousal, valence), each roughly in [-1, 1]."""
-    out = []
-    for axis in ("arousal", "valence"):
-        w = BLENDSHAPE_WEIGHTS[axis]
-        # normalise by the positive weight mass so the scale does not shift
-        # every time a term is added to the table
-        norm = sum(abs(v) for v in w.values()) or 1.0
-        out.append(float(np.clip(
-            sum(blend.get(k, 0.0) * v for k, v in w.items()) / norm * 3.0,
-            -1.0, 1.0)))
-    return out[0], out[1]
-
-
 # =============================================================================
 # derived channels -- the part with time in it
 # =============================================================================
-class AffectState:
-    """Live 5-state affect label -- the plotter's classify_affect, streamed.
-
-    The classification rule is identical: two independent sign tests on
-    baseline-corrected arousal and valence, plus a radius deadband with
-    hysteresis for `neutral`. A weighted sum of the two axes would not do, since
-    projecting the plane onto a line collides the opposite quadrants -- angry
-    and content both land on zero.
-
-    The ONE difference from the offline version, and it is unavoidable: the
-    baseline is a running median over the last BASELINE_WINDOW_S rather than the
-    median of the whole take, because live code cannot see the future. So the
-    label here and the label the plotter assigns to the same recording can
-    disagree, most visibly in the first seconds and after a sustained
-    expression shifts the running median. Treat the plot as the authority.
-    """
-
-    def __init__(self, window_s: float = BASELINE_WINDOW_S):
-        self.window_s = window_s
-        self.buf: deque[tuple[float, float, float]] = deque()
-        self.state = "calibrating"
-        self.baseline = (0.0, 0.0)
-        self._in_neutral = True
-
-    def update(self, t: float, arousal: float, valence: float,
-               have_face: bool) -> str:
-        if not have_face:
-            # 'unknown', NOT 'neutral'. Neutral is a claim about a face that was
-            # looked at; with no face there is nothing to claim. Reporting the
-            # two as the same value makes an absence indistinguishable from a
-            # calm person, and downstream that is a real bug: a state machine
-            # rule reading "Neutral == 1" would fire when someone LEFT.
-            # In the FSM's terms this is all five emotion inputs at 0.
-            self.state, self._in_neutral = "unknown", True
-            return self.state
-
-        self.buf.append((t, arousal, valence))
-        while self.buf and t - self.buf[0][0] > self.window_s:
-            self.buf.popleft()
-
-        span = self.buf[-1][0] - self.buf[0][0] if len(self.buf) > 1 else 0.0
-        if span < BASELINE_MIN_S:
-            self.state = "calibrating"      # a median over half a second is noise
-            return self.state
-
-        arr = np.asarray(self.buf, float)
-        a_base, v_base = float(np.median(arr[:, 1])), float(np.median(arr[:, 2]))
-        self.baseline = (a_base, v_base)
-        da, dv = arousal - a_base, valence - v_base
-
-        # harder to leave a state than to hold it -- inverting these two makes
-        # the deadband easier to escape than to re-enter, which adds chatter
-        bar = DEADBAND if self._in_neutral else DEADBAND * DEADBAND_HYST
-        if float(np.hypot(da, dv)) < bar:
-            self.state, self._in_neutral = "neutral", True
-        else:
-            self._in_neutral = False
-            self.state = STATE_QUADRANT[(da > A_THRESH, dv > V_THRESH)]
-        return self.state
-
-
 class Channels:
     """Turns per-frame observations into the signals an appraisal layer wants.
 
@@ -411,7 +256,7 @@ class Channels:
 
     @staticmethod
     def attending(obs: FaceObs) -> bool:
-        return abs(obs.yaw) < ATTEND_YAW_DEG and abs(obs.pitch) < ATTEND_PITCH_DEG
+        return attending(obs.yaw, obs.pitch)
 
     @property
     def distance(self) -> Optional[float]:

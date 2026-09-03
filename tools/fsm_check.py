@@ -50,6 +50,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))     # the package, for shoggoth_mini.affect
 
 ANY = "__ANY__"
 PREVIOUS = "Previous state"
@@ -399,7 +400,8 @@ def check_reachability(rep, states, transitions, vectors, start):
 # =============================================================================
 def replay(path: Path, states, transitions, start, timing):
     import numpy as np
-    from plot_face_csv import load as load_face, detect_head_gestures
+    from plot_face_csv import load as load_face
+    from shoggoth_mini.affect import detect_head_gestures
 
     print(f"\n=== REPLAY: {path.name} ===")
     d = load_face(path)

@@ -74,8 +74,12 @@ def capture():
         rec["nod_digest"], rec["shake_digest"] = digest(nod), digest(shake)
         rec["nod_spans"] = [[round(a, 3), round(b, 3)] for a, b in pfc._spans(t, nod)]
         rec["shake_spans"] = [[round(a, 3), round(b, 3)] for a, b in pfc._spans(t, shake)]
-        rec["rolling_sigma_yaw_digest"] = digest(pfc._rolling_sigma(t, yaw))
-        rec["rolling_sigma_pitch_digest"] = digest(pfc._rolling_sigma(t, pitch))
+        try:                                    # post-refactor home
+            from shoggoth_mini.affect.gestures import _rolling_sigma
+        except ImportError:                     # pre-refactor home
+            _rolling_sigma = pfc._rolling_sigma
+        rec["rolling_sigma_yaw_digest"] = digest(_rolling_sigma(t, yaw))
+        rec["rolling_sigma_pitch_digest"] = digest(_rolling_sigma(t, pitch))
 
         # --- attention ------------------------------------------------------
         att = [bool(abs(yaw[i]) < fp.ATTEND_YAW_DEG
