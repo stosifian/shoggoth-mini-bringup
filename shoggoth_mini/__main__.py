@@ -72,6 +72,30 @@ app.add_typer(rl_app, name="rl", help="RL training and evaluation")
 app.add_typer(record_app, name="record", help="Record data from stereo camera")
 
 
+@app.command("orchestrate-mirror")
+def orchestrate_mirror(
+    tables: str = typer.Option("shoggoth-mirror-state",
+                               "--tables", help="directory of the state CSVs"),
+    source: str = typer.Option("0", "--source",
+                               help="camera index, or a video file"),
+    motors: bool = typer.Option(False, "--motors/--no-motors",
+                                help="connect to the motor bus. OFF by default"),
+    csv_path: Optional[str] = typer.Option(None, "--csv",
+                                           help="write a session log"),
+    config: Optional[str] = typer.Option(None, "--config"),
+    crop: int = typer.Option(0, "--crop", help="face search-crop side, px"),
+    flip_yaw: bool = typer.Option(False, "--flip-yaw"),
+    flip_pitch: bool = typer.Option(False, "--flip-pitch"),
+) -> None:
+    """Run the mirror state machine on the robot (motors off unless --motors)."""
+    from pathlib import Path as _P
+    from .orchestrator.mirror import run_mirror
+
+    run_mirror(_P(tables), source=source, use_motors=motors,
+               csv_path=_P(csv_path) if csv_path else None, config=config,
+               crop=crop, flip_yaw=flip_yaw, flip_pitch=flip_pitch)
+
+
 @app.command()
 def orchestrate(
     config: Optional[str] = typer.Option(
