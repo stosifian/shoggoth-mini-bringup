@@ -1,8 +1,7 @@
 State,Min Duration,Notes
 ALONE,-,-
 NOTICING,400ms,
-ENGAGED,700ms,
-NEUTRAL,-,-
+NEUTRAL,700ms,-
 CONTENT,-,
 EXCITED,-,
 SAD,-,

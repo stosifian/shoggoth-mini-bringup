@@ -1,8 +1,7 @@
 State,Means,Body,Conditions,Notes
 ALONE,No one present but on,Play “slow_breathe” motion primitive,No face/landmarks being returned ,
 NOTICING,Someone present but not paying attention,Play “normal_breathe” motion,Face/landmarks being returned & Attention == 0,
-ENGAGED,User is paying attention,Play “slow_circle” motion primitive,Attention == 1,
-NEUTRAL,User is displaying neutral emotion,Play “side_side” motion primitive (not yet defined),,
+NEUTRAL,User is displaying neutral emotion,Play “slow_circle” motion primitive,Attention == 1,NEUTRAL is now equivalent to what was called ENGAGED
 CONTENT,Senses engaged user is content,Play “wave_packet_am” motion primitive,,Mirror condition (should ‘replay’ user state back)
 EXCITED,Senses engaged user is excited,Play “wave_packet_fm” motion primitive,,Mirror condition (should ‘replay’ user state back)
 SAD,Senses engaged user is sad,Play “grab_object” motion primitive,,Mirror condition (should ‘replay’ user state back)

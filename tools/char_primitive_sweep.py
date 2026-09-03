@@ -63,7 +63,7 @@ TICKS_TO_MM = 0.11 / PERIOD * 1000
 # (0.25) but is rate-limited to 15 ticks per 10 ms loop, so it moves at ~1500
 # ticks/s, a fifth of the servo ceiling. Grab is last because it is a single
 # unramped command. RELEASE is the neutral pose, so it is a no-op opener.
-ORDER = ["sweep", "release", "slow_breathe", "packet_am", "packet_fm", "slow_circle", "circle", "shake", "high_five", "yes", "no", "grab"]
+ORDER = ["sweep", "release", "slow_breathe", "normal_breathe", "packet_am", "packet_fm", "slow_circle", "circle", "shake", "high_five", "yes", "no", "grab"]
 BEHAVIOUR = {
     "sweep": "sweep",           # not a MotionBehavior: dispatched to perform_sweep
     "yes": MotionBehavior.YES, "no": MotionBehavior.NO,
@@ -72,6 +72,7 @@ BEHAVIOUR = {
     "packet_am": MotionBehavior.PACKET_AM,
     "packet_fm": MotionBehavior.PACKET_FM,
     "slow_breathe": MotionBehavior.SLOW_BREATHE,
+    "normal_breathe": MotionBehavior.NORMAL_BREATHE,
     "grab": MotionBehavior.GRAB, "release": MotionBehavior.RELEASE,
     "high_five": MotionBehavior.HIGH_FIVE,
 }

@@ -1,11 +1,6 @@
 From,-> To,Conditions,Priority
 ALONE,NOTICING,Face == 1 > 1 second,3
-NOTICING,ENGAGED,Attention == 1 for > 1.5 seconds,3
-ENGAGED,NEUTRAL,Neutral == 1 for > 1 second,3
-ENGAGED,CONTENT,Content == 1 for > 1.5 seconds,3
-ENGAGED,EXCITED,Excited == 1 for > 1.5 seconds,3
-ENGAGED,SAD,Sad == 1 for > 1.5 seconds,3
-ENGAGED,ANGRY,Angry == 1 for > 1.5 seconds,3
+NOTICING,NEUTRAL,Attention == 1 for > 1.5 seconds,3
 NEUTRAL,CONTENT,Content == 1 for > 1.5 seconds & Face == 1,3
 NEUTRAL,EXCITED,Excited == 1 for > 1.5 seconds & Face == 1,3
 NEUTRAL,SAD,Sad == 1 for > 1.5 seconds & Face == 1,3

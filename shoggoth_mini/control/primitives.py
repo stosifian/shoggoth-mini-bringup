@@ -33,6 +33,7 @@ class MotionBehavior(Enum):
     PACKET_AM = "<wave_packet_am>"
     PACKET_FM = "<wave_packet_fm>"
     SLOW_BREATHE = "<slow_breathe>"
+    NORMAL_BREATHE = "<normal_breathe>"
     GRAB = "<grab_object>"
     RELEASE = "<release_object>"
     HIGH_FIVE = "<high_five>"
@@ -348,6 +349,15 @@ SLOW_CIRCLE_CONFIG = SlowCircleMotionConfig()
 PACKET_AM_CONFIG = WavePacketAMConfig()
 PACKET_FM_CONFIG = WavePacketFMConfig()
 SLOW_BREATHE_CONFIG = SlowBreatheConfig()
+# Same breath at double frequency, for the state machine's NOTICING state --
+# present but not yet attended to, so a touch more alive than ALONE without
+# being a reaction. Only the period changes; keeping it a config variant rather
+# than a second primitive means the shape, the easing and the deadzone
+# workaround stay defined in exactly one place.
+#
+# Peak rate scales with 1/period: 700 * pi / 2.0 = ~1100 ticks/s, about 14% of
+# the measured 7600 ticks/s servo ceiling, so it is still a gentle motion.
+NORMAL_BREATHE_CONFIG = SlowBreatheConfig(period_s=2.0)
 GRAB_CONFIG = GrabMotionConfig()
 RELEASE_CONFIG = ReleaseMotionConfig()
 HIGH_FIVE_CONFIG = HighFiveMotionConfig()
@@ -617,7 +627,28 @@ def perform_slow_breathe_motion(
     noise_scale: float = 0.0,
 ) -> None:
     """Slow undulating grab: a unipolar swell along motor 2's axis, repeated."""
-    cfg = SLOW_BREATHE_CONFIG
+    _breathe(motor_controller, calibrated_ticks_map, SLOW_BREATHE_CONFIG,
+             noise_scale=noise_scale)
+
+
+def perform_normal_breathe_motion(
+    motor_controller: MotorController,
+    calibrated_ticks_map: Dict[str, int],
+    *,
+    noise_scale: float = 0.0,
+) -> None:
+    """The same breath at double frequency. See NORMAL_BREATHE_CONFIG."""
+    _breathe(motor_controller, calibrated_ticks_map, NORMAL_BREATHE_CONFIG,
+             noise_scale=noise_scale)
+
+
+def _breathe(
+    motor_controller: MotorController,
+    calibrated_ticks_map: Dict[str, int],
+    cfg: SlowBreatheConfig,
+    *,
+    noise_scale: float = 0.0,
+) -> None:
     d = np.array([np.cos(np.radians(cfg.direction_deg)),
                   np.sin(np.radians(cfg.direction_deg))])
     peak_magnitude = cfg.peak_ticks / float(MOTOR_ONE_FULL_TURN_TICKS)
@@ -761,6 +792,15 @@ def execute_behavior(
 
         elif behavior == MotionBehavior.CIRCLE:
             perform_circle_motion(
+                motor_controller,
+                calibrated_ticks_map,
+                noise_scale=noise_scale,
+            )
+            behaviors_performed = True
+            reset_after_sequence = True
+
+        elif behavior == MotionBehavior.NORMAL_BREATHE:
+            perform_normal_breathe_motion(
                 motor_controller,
                 calibrated_ticks_map,
                 noise_scale=noise_scale,

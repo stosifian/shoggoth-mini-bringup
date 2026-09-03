@@ -13,7 +13,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-NAMES=(yes no shake circle slow_circle slow_breathe wave_packet_am
+NAMES=(yes no shake circle slow_circle slow_breathe normal_breathe wave_packet_am
        wave_packet_fm grab_object release_object high_five)
 
 if [[ $# -lt 1 || "${1:-}" == "--list" || "${1:-}" == "-l" ]]; then
