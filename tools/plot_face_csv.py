@@ -34,6 +34,7 @@ import csv
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.transforms as mtransforms
 import numpy as np
 
 LEGEND_KW = dict(loc="upper left", bbox_to_anchor=(1.01, 1.0), ncol=1,
@@ -48,6 +49,14 @@ IPD_LO, IPD_HI = 0.055, 0.072      # plausible adult interpupillary distance (m)
 # Kept as literals rather than imported: face_probe pulls in mediapipe and the
 # whole perception stack, which is a lot to load to draw two dashed lines.
 ATTEND_YAW_DEG, ATTEND_PITCH_DEG = 25.0, 20.0
+
+
+def load_live_states(path):
+    """The `state` column, if the take carries one. None for older recordings."""
+    rows = list(csv.DictReader(open(path)))
+    if not rows or "state" not in rows[0]:
+        return None
+    return np.array([(r["state"] or "").strip() for r in rows], dtype=object)
 
 
 def load(path):
@@ -79,6 +88,8 @@ GESTURE_BAND = (-20.0, 40.0)
 GESTURE_HZ = (0.8, 4.0)     # a head nod/shake, in cycles per second
 MIN_EVENT_S = 0.30          # shorter than this is not a gesture
 MERGE_GAP_S = 0.30          # detections closer than this are one event
+GESTURE_MAX_YAW = 30.0      # a gesture is aimed AT the robot; see detect_head_gestures
+NOISE_WINDOW_S = 5.0        # neighbourhood the local noise floor is measured over
 
 
 def _half_cycles(w, hyst):
@@ -96,6 +107,33 @@ def _half_cycles(w, hyst):
         elif v < -hyst and state >= 0:
             state, count = -1, count + (state != 0)
     return count
+
+
+def _rolling_sigma(t, sig, win_s=NOISE_WINDOW_S):
+    """Per-frame noise floor, measured over a local neighbourhood.
+
+    A single figure for a whole take is wrong when conditions change within it.
+    Measured on one recording: landmark noise is 0.64 deg with the face head-on
+    and 2.96 deg at 57 deg of yaw, because MediaPipe's fit degrades badly on a
+    profile. A global estimate is dominated by the quiet stretches, so the bar
+    ends up far too low exactly where the signal is worst -- which is how a
+    profile-view wobble of 8.3 deg was reported as a head shake.
+
+    The window is deliberately much longer than a gesture. Measure noise over a
+    window the size of the gesture and a real shake inflates its own noise
+    estimate until it fails its own test; at 5 s a 0.6 s gesture is ~12% of the
+    samples, which the median absorbs.
+    """
+    t = np.asarray(t, float)
+    d = np.abs(np.diff(np.asarray(sig, float)))
+    out = np.zeros(len(t))
+    for i in range(len(t)):
+        lo = np.searchsorted(t, t[i] - win_s / 2.0, "left")
+        hi = np.searchsorted(t, t[i] + win_s / 2.0, "right")
+        seg = d[lo:max(hi - 1, lo + 1)]
+        seg = seg[np.isfinite(seg)]
+        out[i] = float(np.median(seg) / 1.35) if seg.size else 0.0
+    return out
 
 
 def _noise_sigma(sig):
@@ -131,7 +169,8 @@ def _clean(t, mask, min_dur=MIN_EVENT_S, gap=MERGE_GAP_S):
     return out
 
 
-def detect_head_gestures(t, yaw, pitch, win=1.0, min_amp=8.0):
+def detect_head_gestures(t, yaw, pitch, win=1.0, min_amp=8.0,
+                         max_yaw=GESTURE_MAX_YAW):
     """Mark frames inside a nod (pitch oscillating) or a shake (yaw).
 
     Deliberately the simplest thing that can work, on signals already in the
@@ -144,6 +183,14 @@ def detect_head_gestures(t, yaw, pitch, win=1.0, min_amp=8.0):
 
     A nod and a shake cannot both be scored on one frame: real head gestures
     leak into the other axis, so the larger swing wins.
+
+    Two guards against the same false positive, both needed. A nod or shake is
+    a communicative act AIMED at the robot, so a window whose mean yaw is
+    outside `max_yaw` is not a gesture however much it oscillates -- gate on the
+    window mean rather than per frame, since a real shake swings yaw and
+    per-frame clipping would cut its own extremes off. And the amplitude bar
+    comes from a LOCAL noise estimate, because the same wobble means different
+    things head-on and in profile.
     """
     n = len(t)
     amp = {"nod": np.zeros(n), "shake": np.zeros(n)}
@@ -151,13 +198,17 @@ def detect_head_gestures(t, yaw, pitch, win=1.0, min_amp=8.0):
     # either deaf on a clean rig or, as measured here, permanently triggered on
     # a noisy one -- head-pose noise on a marginal detection is several degrees,
     # which is a good fraction of a real gesture.
-    sigma = {"nod": _noise_sigma(pitch), "shake": _noise_sigma(yaw)}
-    floor = {k: max(min_amp, 6.0 * s) for k, s in sigma.items()}
+    sigma = {"nod": _rolling_sigma(t, pitch), "shake": _rolling_sigma(t, yaw)}
 
     for i in range(n):
         lo = np.searchsorted(t, t[i] - win / 2.0, "left")
         hi = np.searchsorted(t, t[i] + win / 2.0, "right")
         if hi - lo < 5:
+            continue
+        # facing away is not addressing the robot, whatever the head is doing
+        facing = yaw[lo:hi]
+        facing = facing[np.isfinite(facing)]
+        if facing.size and abs(float(facing.mean())) > max_yaw:
             continue
         span = float(t[hi - 1] - t[lo]) or win
         for key, sig in (("nod", pitch), ("shake", yaw)):
@@ -165,10 +216,11 @@ def detect_head_gestures(t, yaw, pitch, win=1.0, min_amp=8.0):
             if not np.all(np.isfinite(w)):      # a dropout breaks the window
                 continue
             w = w - w.mean()
+            sg = float(sigma[key][i])
             ptp = float(np.ptp(w))
-            if ptp < floor[key]:
+            if ptp < max(min_amp, 6.0 * sg):
                 continue
-            halves = _half_cycles(w, max(0.30 * ptp, 3.0 * sigma[key], 2.0))
+            halves = _half_cycles(w, max(0.30 * ptp, 3.0 * sg, 2.0))
             if halves < 3:                      # under 1.5 swings is not a gesture
                 continue
             if GESTURE_HZ[0] <= (halves / 2.0) / span <= GESTURE_HZ[1]:
@@ -281,6 +333,9 @@ def main():
                     help="high/low arousal split, RELATIVE to the take's median")
     ap.add_argument("--v-thresh", type=float, default=0.0,
                     help="positive/negative valence split, relative to the median")
+    ap.add_argument("--recompute", action="store_true",
+                    help="ignore the take's own state column and reclassify from "
+                         "arousal/valence using the whole take's median")
     ap.add_argument("--deadband", type=float, default=0.20,
                     help="radius from baseline inside which the state is neutral")
     args = ap.parse_args()
@@ -300,10 +355,22 @@ def main():
     ipd_ok = np.isfinite(ipd)
     ipd_med = float(np.nanmedian(ipd)) if ipd_ok.any() else float("nan")
 
-    state, (a_base, v_base) = classify_affect(
+    # The LIVE labels are authoritative when the take has them: they are what
+    # the robot actually acted on, computed from a running median that could
+    # only see the past. Recomputing here uses the whole take's median, which is
+    # a different (and unavailable-at-runtime) estimate -- on one real recording
+    # the two agree on only 75% of frames. Showing the recomputed labels while
+    # the state machine consumed the live ones makes transitions look
+    # unmotivated for reasons that are entirely an artefact of this plot.
+    live = None if args.recompute else load_live_states(args.csv)
+    recomputed, (a_base, v_base) = classify_affect(
         d["arousal"], d["valence"], a_thresh=args.a_thresh,
         v_thresh=args.v_thresh, deadband=args.deadband,
         have_face=np.isfinite(d["yaw"]))
+    if live is not None:
+        state, shadow, shown_src = live, recomputed, "live (state column)"
+    else:
+        state, shadow, shown_src = recomputed, None, "recomputed here"
 
     fig, ax = plt.subplots(4, 1, figsize=(15, 13), sharex=True)
     title = (f"{args.csv.name} — {n} rows, {rate:.1f} Hz, "
@@ -399,15 +466,32 @@ def main():
     # the only channel this panel has left on information already shown.
     a = ax[3]
     seen = []
-    for st in STATE_NAMES:
+    for st in sorted(set(state) | set(STATE_NAMES), key=lambda x: (
+            STATE_NAMES.index(x) if x in STATE_NAMES else 99)):
         mask = (state == st)
         if not mask.any():
             continue
         seen.append((st, 100.0 * mask.mean()))
         for x0, x1 in _spans(t, mask):
-            a.axvspan(x0, x1, color=STATE_COLORS[st], alpha=.16, lw=0)
-    handles = [plt.Rectangle((0, 0), 1, 1, color=STATE_COLORS[s], alpha=.45)
-               for s, _ in seen]
+            a.axvspan(x0, x1, color=STATE_COLORS.get(st, "0.5"), alpha=.16, lw=0)
+    handles = [plt.Rectangle((0, 0), 1, 1, color=STATE_COLORS.get(s, "0.5"),
+                             alpha=.45) for s, _ in seen]
+
+    # Shadow ribbon: the OTHER classification, drawn as a thin strip along the
+    # bottom. Where it disagrees with the shading above, the running baseline
+    # and the whole-take baseline reached different conclusions -- which is a
+    # diagnostic for BASELINE_WINDOW_S, not a bug in either.
+    if shadow is not None:
+        tr = mtransforms.blended_transform_factory(a.transData, a.transAxes)
+        for st in set(shadow):
+            for x0, x1 in _spans(t, shadow == st):
+                a.fill_between([x0, x1], 0.0, 0.045,
+                               color=STATE_COLORS.get(st, "0.5"), alpha=.85,
+                               lw=0, transform=tr)
+        agree = 100.0 * float((state == shadow).mean())
+        a.text(0.004, 0.955, f"lower strip: recomputed here — agrees with live "
+                             f"on {agree:.0f}% of frames",
+               transform=a.transAxes, fontsize=8, color="0.3")
 
     a.plot(t, d["arousal"], color="tab:blue", lw=1.3, label="arousal")
     a.plot(t, d["valence"], color="tab:green", lw=1.3, label="valence")
@@ -459,6 +543,10 @@ def main():
         v = d[k]
         print(f"  {lab:8} range {np.nanmin(v):+.2f}..{np.nanmax(v):+.2f}  "
               f"sd {np.nanstd(v):.3f}")
+    print(f"  affect labels: {shown_src}")
+    if shadow is not None:
+        print(f"    agreement with the recomputed labels: "
+              f"{100*float((state == shadow).mean()):.1f}%")
     print(f"  affect baseline: arousal {a_base:+.3f}, valence {v_base:+.3f} "
           f"(take median)   deadband {args.deadband}")
     occ = "  ".join(f"{s} {100.0*(state == s).mean():.0f}%"

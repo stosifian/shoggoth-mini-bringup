@@ -19,5 +19,5 @@ ANGRY,NEUTRAL,Neutral == 1 for > 1 second & Face == 1,3
 "Any except ALONE, NO, YES",NO,No == 1 is detected for > 500 ms,1
 YES,Previous state,Return to state machine was in before YES after min duration,3
 NO,Previous state,Return to state machine was in before NO after min duration,3
-Any except ALONE,ALONE,Face == 0 for > 1.5 seconds,3
+Any except ALONE,ALONE,Face == 0 for > 1.5 seconds,2
 Any except NOTICING,NOTICING,Face == 1 > 1.5 seconds and Attention == 0 for > 1.5 seconds,2
