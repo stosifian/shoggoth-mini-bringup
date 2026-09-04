@@ -164,6 +164,11 @@ class MotionWorker:
         self.dry_run = dry_run
         self._mail: queue.Queue = queue.Queue(maxsize=1)
         self._stop = threading.Event()
+        # Set by post() and stop() to cut a primitive short. Primitives that
+        # honour it check between command points and ease back to neutral, so a
+        # state change lands in ~0.3 s instead of waiting out a play that can
+        # run 25 s. Ones that do not honour it simply finish, as before.
+        self._interrupt = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self.current: Optional[BodyAction] = None
         self.plays = 0
@@ -179,6 +184,7 @@ class MotionWorker:
         except queue.Empty:
             pass
         self._mail.put_nowait(action)
+        self._interrupt.set()                  # cut short whatever is playing
 
     def stop(self, timeout: float = 30.0) -> None:
         """Stop, and do not return until the body has actually stopped moving.
@@ -201,6 +207,7 @@ class MotionWorker:
         # writes but cannot stop the COMMANDS alternating, which the static
         # check saw as a 570-tick step at 3.2M ticks/s.
         self._stop.set()
+        self._interrupt.set()
         if self._thread:
             self._thread.join(timeout=timeout)
             if self._thread.is_alive():
@@ -221,7 +228,8 @@ class MotionWorker:
             time.sleep(0.4)                    # stand in for the motion
             return True
         try:
-            execute_behavior(self.mc, behaviour, noise_scale=0.0)
+            execute_behavior(self.mc, behaviour, noise_scale=0.0,
+                             should_stop=self._interrupt.is_set)
             return True
         except Exception as exc:               # a failed motion is not fatal
             print(f"\n  ! motion {primitive} failed: {exc}")
@@ -245,6 +253,7 @@ class MotionWorker:
             if act is None or act.primitive is None:
                 time.sleep(0.05)
                 continue
+            self._interrupt.clear()            # fresh play, fresh flag
             self.plays += 1
             self._play(act.primitive)
             if act.loop:

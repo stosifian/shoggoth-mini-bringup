@@ -737,10 +737,11 @@ def perform_slow_breathe_motion(
     calibrated_ticks_map: Dict[str, int],
     *,
     noise_scale: float = 0.0,
+    should_stop=None,
 ) -> None:
     """Slow undulating grab: a unipolar swell along motor 2's axis, repeated."""
     _breathe(motor_controller, calibrated_ticks_map, SLOW_BREATHE_CONFIG,
-             noise_scale=noise_scale)
+             noise_scale=noise_scale, should_stop=should_stop)
 
 
 def perform_normal_breathe_motion(
@@ -748,10 +749,11 @@ def perform_normal_breathe_motion(
     calibrated_ticks_map: Dict[str, int],
     *,
     noise_scale: float = 0.0,
+    should_stop=None,
 ) -> None:
     """The same breath at double frequency. See NORMAL_BREATHE_CONFIG."""
     _breathe(motor_controller, calibrated_ticks_map, NORMAL_BREATHE_CONFIG,
-             noise_scale=noise_scale)
+             noise_scale=noise_scale, should_stop=should_stop)
 
 
 def _breathe(
@@ -760,6 +762,7 @@ def _breathe(
     cfg: SlowBreatheConfig,
     *,
     noise_scale: float = 0.0,
+    should_stop=None,
 ) -> None:
     d = np.array([np.cos(np.radians(cfg.direction_deg)),
                   np.sin(np.radians(cfg.direction_deg))])
@@ -783,6 +786,10 @@ def _breathe(
             )
             motor_controller.set_positions(target_positions)
             time.sleep(cfg.time_per_point)
+            if _stopping(should_stop):
+                _ease_to_neutral(motor_controller, calibrated_ticks_map,
+                                 magnitude * d)
+                return
 
 
 # Grab is the deepest reach in the set and the closest to the encoder end stop:
@@ -828,6 +835,35 @@ def max_grab_magnitude(calibrated_ticks_map: Dict[str, int],
     return max(0.0, min(caps)) if caps else 0.0
 
 
+# How long an interrupted primitive takes to ease back to neutral. Bailing out
+# of a loop leaves the tentacle wherever it was; execute_behavior's reset would
+# then snap it home in one command, which is the jump the arch already had to be
+# fixed for. 0.3 s at 700 ticks is 2300 ticks/s, well under the ceiling.
+INTERRUPT_EASE_S = 0.30
+
+
+def _stopping(should_stop) -> bool:
+    return should_stop is not None and should_stop()
+
+
+def _ease_to_neutral(motor_controller, calibrated_ticks_map, cursor,
+                     seconds: float = INTERRUPT_EASE_S, dt: float = 0.02) -> None:
+    """Ramp a cursor back to zero, for a primitive cut short mid-motion."""
+    cursor = np.asarray(cursor, float)
+    if float(np.linalg.norm(cursor)) < 1e-6:
+        return
+    n = max(2, int(round(seconds / dt)))
+    for i in range(n - 1, -1, -1):
+        ease = (1.0 - np.cos(np.pi * i / n)) / 2.0
+        target_positions, _ = cursor_to_motor_positions(
+            cursor_pos=cursor * ease,
+            calibrated_ticks_map=calibrated_ticks_map,
+            cursor_deadzone=1e-6,
+        )
+        motor_controller.set_positions(target_positions)
+        time.sleep(dt)
+
+
 def side_side_segments(cfg: SideSideConfig):
     """(target fraction, duration) from neutral, tick-tock, back to neutral.
 
@@ -853,6 +889,7 @@ def perform_side_side_motion(
     cfg: SideSideConfig = None,
     *,
     noise_scale: float = 0.0,
+    should_stop=None,
 ) -> None:
     """Play the tick-tock sway described by `cfg`."""
     cfg = cfg or SIDE_SIDE_CONFIG
@@ -879,6 +916,10 @@ def perform_side_side_motion(
             )
             motor_controller.set_positions(target_positions)
             time.sleep(cfg.time_per_point)
+            if _stopping(should_stop):
+                _ease_to_neutral(motor_controller, calibrated_ticks_map,
+                                 d * cfg.amplitude * frac)
+                return
         cur = target
 
 
@@ -1024,6 +1065,7 @@ def execute_behavior(
     behavior: MotionBehavior,
     *,
     noise_scale: float = 0.010,
+    should_stop=None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """Execute a motion behavior primitive.
@@ -1098,6 +1140,7 @@ def execute_behavior(
             perform_side_side_motion(
                 motor_controller, calibrated_ticks_map,
                 SIDE_SIDE_CONFIG, noise_scale=noise_scale,
+                should_stop=should_stop,
             )
             behaviors_performed = True
             reset_after_sequence = True
@@ -1106,6 +1149,7 @@ def execute_behavior(
             perform_side_side_motion(
                 motor_controller, calibrated_ticks_map,
                 SIDE_SIDE_FAST_CONFIG, noise_scale=noise_scale,
+                should_stop=should_stop,
             )
             behaviors_performed = True
             reset_after_sequence = True
@@ -1124,6 +1168,7 @@ def execute_behavior(
                 motor_controller,
                 calibrated_ticks_map,
                 noise_scale=noise_scale,
+                should_stop=should_stop,
             )
             behaviors_performed = True
             reset_after_sequence = True
