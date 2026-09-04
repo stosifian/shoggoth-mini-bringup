@@ -104,12 +104,16 @@ ONE_SHOT = {"YES", "NO"}
 # curled pose with nothing ever releasing, and char_primitive_sweep's own
 # safety note calls grab "38.5 mm of cable out of two motors at once, fast,
 # which is exactly how wire comes off a roller when there is no tension on it".
-HOLDS = {"grab_object": "release_object"}
+HOLDS = {"grab_object": "release_object", "arched": "release_object"}
 
-# Pause between repeats of a looping body. Without it the worker re-fires as
-# soon as its mailbox poll times out, 0.1 s later, which reads as relentless
-# rather than alive.
-LOOP_GAP_S = 0.6
+# Pause between repeats of a looping body, ON TOP of what execute_behavior
+# already imposes: it ends every non-holding primitive with a reset to the
+# calibrated pose and a hard 0.2 s sleep, and the mailbox poll adds 0.1 s. That
+# floor of ~0.3 s was already visible as a stutter between cycles, so this is
+# 0 rather than the 0.6 it started at -- sustained bodies are meant to read as
+# continuous, and the residual gap is not ours to remove without changing
+# execute_behavior, which orchestrate shares.
+LOOP_GAP_S = 0.0
 
 
 def body_for(state: str, states_rows: list[dict]) -> BodyAction:

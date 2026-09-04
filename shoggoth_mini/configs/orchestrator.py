@@ -138,7 +138,7 @@ class OrchestratorConfig(BaseConfig):
                                 "<circle>",
                                 "<grab_object>",
                                 "<release_object>",
-                                "<normal_breathe>", "<high_five>",
+                                "<normal_breathe>", "<arched>", "<high_five>",
                             ],
                         },
                     },

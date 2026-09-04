@@ -72,14 +72,17 @@ STOP_TIMEOUT_S = 180.0
 ORDER = ["ALONE", "NOTICING", "NEUTRAL", "CONTENT", "EXCITED", "SAD", "YES", "NO"]
 
 
-def rehearse(worker, state, body, loops, settle):
-    """Post a body the way the orchestrator does, and let it run."""
+def rehearse(worker, state, body, loops, settle, cap=None):
+    """Post a body the way the orchestrator does, and let it run.
+
+    `cap` bounds the time spent, because a primitive cannot be interrupted and
+    two of them run the better part of a minute per play. Capping means a state
+    may be cut mid-motion, which is fine for a rehearsal and NOT how the
+    orchestrator behaves.
+    """
     worker.post(body)
-    if body.loop:
-        # a looping body repeats until something else is posted; give it a few
-        time.sleep(loops * (settle + LOOP_GAP_S))
-    else:
-        time.sleep(settle)
+    want = loops * (settle + LOOP_GAP_S) if body.loop else settle
+    time.sleep(min(want, cap) if cap else want)
 
 
 def main() -> int:
@@ -93,8 +96,12 @@ def main() -> int:
     ap.add_argument("--only", default=None, help="comma-separated states")
     ap.add_argument("--pause", action="store_true",
                     help="wait for Enter before each state")
-    ap.add_argument("--loops", type=int, default=2,
+    ap.add_argument("--loops", type=int, default=3,
                     help="repeats to allow a looping body")
+    ap.add_argument("--max-seconds", type=float, default=20.0,
+                    help="cap per state. The long ones are long because the "
+                         "PRIMITIVE is: a wave packet runs ~45 s per play, so "
+                         "the loop count is not what makes them slow")
     ap.add_argument("--settle", type=float, default=3.0,
                     help="seconds allowed per primitive")
     ap.add_argument("--max-drift", type=int, default=60,
@@ -137,7 +144,7 @@ def main() -> int:
         w.start()
         b = bodies[s]
         t_start = time.time()
-        rehearse(w, s, b, args.loops, 0.05)
+        rehearse(w, s, b, args.loops, 0.05, args.max_seconds)
         if b.on_exit:
             w.post(BodyAction("_after", None))     # forces the release
             time.sleep(0.3)
@@ -224,7 +231,8 @@ def main() -> int:
                 # phase 1 measured how long this body actually takes; wait that
                 # long rather than a guess, so nothing is cut off mid-motion
                 rehearse(w, s, bodies[s], args.loops,
-                         max(args.settle, timing.get(s, args.settle)))
+                         max(args.settle, timing.get(s, args.settle)),
+                         args.max_seconds)
             finally:
                 w.stop(timeout=STOP_TIMEOUT_S)   # also releases a held grip
             dur = time.time() - t0

@@ -34,6 +34,7 @@ class MotionBehavior(Enum):
     PACKET_FM = "<wave_packet_fm>"
     SLOW_BREATHE = "<slow_breathe>"
     NORMAL_BREATHE = "<normal_breathe>"
+    ARCHED = "<arched>"
     GRAB = "<grab_object>"
     RELEASE = "<release_object>"
     HIGH_FIVE = "<high_five>"
@@ -371,6 +372,37 @@ SLOW_BREATHE_CONFIG = SlowBreatheConfig()
 # Peak rate scales with 1/period: 700 * pi / 2.0 = ~1100 ticks/s, about 14% of
 # the measured 7600 ticks/s servo ceiling, so it is still a gentle motion.
 NORMAL_BREATHE_CONFIG = SlowBreatheConfig(period_s=2.0)
+
+
+@dataclass
+class ArchedConfig:
+    """A held arch: ramp to a fixed offset along motor 2's axis and stay there.
+
+    Written for SAD and ANGRY, which previously used grab. Grab reaches as deep
+    as the calibration allows -- 1127 ticks at the 2026-09-04 zeros, arriving in
+    a single command at 3700 ticks/s. That is a lunge, and for a state whose
+    whole point is a held posture it is both the wrong shape and the closest
+    thing in the set to the encoder end stop.
+
+    This is the opposite: a FIXED 500 ticks, reached by a linear ramp over 1.5 s.
+    Fixed rather than derived because the pose is the point -- at 500 ticks it
+    sits 2495 ticks clear of the range at today's zeros and would still be clear
+    after 2000 ticks of retension drift, so it needs no cap to stay safe.
+
+    Peak rate is 500/1.5 = 333 ticks/s, about 4% of the servo ceiling and the
+    gentlest motion in the set apart from the breaths.
+
+    Holds when it finishes, like grab: MotionWorker plays the release when the
+    state changes.
+    """
+
+    offset_ticks: int = 500
+    ramp_s: float = 1.5
+    direction_deg: float = 330.0     # motor 2's axis, as slow_breathe uses
+    time_per_point: float = 0.02
+
+
+ARCHED_CONFIG = ArchedConfig()
 GRAB_CONFIG = GrabMotionConfig()
 RELEASE_CONFIG = ReleaseMotionConfig()
 HIGH_FIVE_CONFIG = HighFiveMotionConfig()
@@ -729,6 +761,31 @@ def max_grab_magnitude(calibrated_ticks_map: Dict[str, int],
     return max(0.0, min(caps)) if caps else 0.0
 
 
+def perform_arched_motion(
+    motor_controller: MotorController,
+    calibrated_ticks_map: Dict[str, int],
+    noise_scale: float = 0.0,
+) -> None:
+    """Ramp linearly to the arch offset and hold there."""
+    cfg = ARCHED_CONFIG
+    d = np.array([np.cos(np.radians(cfg.direction_deg)),
+                  np.sin(np.radians(cfg.direction_deg))])
+    peak = cfg.offset_ticks / float(MOTOR_ONE_FULL_TURN_TICKS)
+    steps = max(2, int(round(cfg.ramp_s / cfg.time_per_point)))
+    logger.info("Arching to %d ticks over %.1fs", cfg.offset_ticks, cfg.ramp_s)
+    for i in range(1, steps + 1):
+        target_positions, _ = cursor_to_motor_positions(
+            cursor_pos=d * (peak * i / steps),
+            calibrated_ticks_map=calibrated_ticks_map,
+            noise_scale=noise_scale,
+            # the ramp starts at zero, well inside the default deadzone, which
+            # would otherwise flatten the first third of the motion
+            cursor_deadzone=1e-6,
+        )
+        motor_controller.set_positions(target_positions)
+        time.sleep(cfg.time_per_point)
+
+
 def perform_grab_motion(
     motor_controller: MotorController,
     calibrated_ticks_map: Dict[str, int],
@@ -874,6 +931,15 @@ def execute_behavior(
             )
             behaviors_performed = True
             reset_after_sequence = True
+
+        elif behavior == MotionBehavior.ARCHED:
+            perform_arched_motion(
+                motor_controller,
+                calibrated_ticks_map,
+                noise_scale=noise_scale,
+            )
+            behaviors_performed = True
+            reset_after_sequence = False       # a held posture, like grab
 
         elif behavior == MotionBehavior.NORMAL_BREATHE:
             perform_normal_breathe_motion(
