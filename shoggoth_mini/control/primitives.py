@@ -686,15 +686,78 @@ def _breathe(
             time.sleep(cfg.time_per_point)
 
 
+# Grab is the deepest reach in the set and the closest to the encoder end stop:
+# at the 2026-09-04 zeros it commanded 4014 of 4095, 81 ticks from refusal. It is
+# also the one whose margin shrinks on its own, because retension only ever winds
+# the zeros UP and motor 2 -- the axis grab drives, alignment +1.0 -- has the
+# least headroom.
+#
+# So the depth is DERIVED from the live calibration rather than fixed. A literal
+# that is correct today stops being correct the first time the tendons are
+# retensioned, silently.
+GRAB_TICK_MARGIN = 100      # never command within this of 0 or 4095
+GRAB_MIN_TICKS = 500        # below this the grip is too shallow to be useful
+
+
+def max_grab_magnitude(calibrated_ticks_map: Dict[str, int],
+                       margin: int = GRAB_TICK_MARGIN) -> float:
+    """Deepest grab that keeps every motor `margin` ticks inside 0..4095.
+
+    Offset for a motor is alignment * magnitude * 4096, so each motor caps the
+    magnitude at (limit - zero) / (alignment * 4096); the smallest cap wins.
+    Bounds both ends: motors anti-aligned with the grab axis travel DOWNWARD,
+    and which motor binds can change as the zeros move.
+    """
+    direction = np.asarray(GRAB_CONFIG.grab_cursor_pos, float)
+    n = np.linalg.norm(direction)
+    if n < 1e-9:
+        return 0.0
+    direction = direction / n
+
+    caps = []
+    for name, pos in MOTOR_NORMALIZED_POSITIONS.items():
+        pos = np.asarray(pos, float)
+        pn = np.linalg.norm(pos)
+        if pn < 1e-9:
+            continue
+        align = float(np.dot(direction, pos / pn))
+        if abs(align) < 1e-6:
+            continue
+        zero = calibrated_ticks_map.get(name, 0)
+        limit = (MOTOR_ONE_FULL_TURN_TICKS - 1 - margin) if align > 0 else margin
+        caps.append((limit - zero) / (align * MOTOR_ONE_FULL_TURN_TICKS))
+    return max(0.0, min(caps)) if caps else 0.0
+
+
 def perform_grab_motion(
     motor_controller: MotorController,
     calibrated_ticks_map: Dict[str, int],
     noise_scale: float = 0.0,
 ) -> None:
-    """Move tentacle to predefined grabbing position."""
-    logger.info("Moving to GRAB position: %s", GRAB_CONFIG.grab_cursor_pos)
+    """Move tentacle to a grab pose, no deeper than the calibration allows."""
+    wanted = float(np.linalg.norm(GRAB_CONFIG.grab_cursor_pos))
+    cap = max_grab_magnitude(calibrated_ticks_map)
+    magnitude = min(wanted, cap)
+    ticks = int(round(magnitude * MOTOR_ONE_FULL_TURN_TICKS))
+
+    if cap < wanted:
+        logger.warning(
+            "Grab depth capped %.4f -> %.4f (%d ticks) to keep %d ticks clear "
+            "of the encoder range at the current zeros %s",
+            wanted, cap, ticks, GRAB_TICK_MARGIN, calibrated_ticks_map)
+    if ticks < GRAB_MIN_TICKS:
+        logger.warning(
+            "GRAB IS NOW ONLY %d TICKS DEEP (floor %d). The zeros have drifted "
+            "far enough that the grip is not worth having -- re-zero the motors "
+            "rather than relying on this. Current zeros: %s",
+            ticks, GRAB_MIN_TICKS, calibrated_ticks_map)
+
+    direction = np.asarray(GRAB_CONFIG.grab_cursor_pos, float)
+    direction = direction / (np.linalg.norm(direction) or 1.0)
+    cursor = direction * magnitude
+    logger.info("Moving to GRAB position: %s (magnitude %.4f)", cursor, magnitude)
     target_positions_grab, _ = cursor_to_motor_positions(
-        cursor_pos=GRAB_CONFIG.grab_cursor_pos,
+        cursor_pos=cursor,
         calibrated_ticks_map=calibrated_ticks_map,
         noise_scale=noise_scale,
     )
