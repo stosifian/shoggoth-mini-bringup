@@ -58,7 +58,7 @@ from ..affect import (Channels, AffectState, attending, detect_head_gestures,
                       STATE_NAMES)
 from ..affect.config import GESTURE_WINDOW_S
 from ..affect.fsm import EMOTIONS, Machine, load_tables, min_dur
-from ..perception.camera import read_oriented
+from ..perception.camera import read_oriented, set_camera_orientation
 from ..perception.face import IRIS_L, IRIS_R, NOSE_TIP, Roi, detect_face
 from ..perception.stereo import (load_stereo_calibration, split_stereo_frame,
                                  triangulate_points)
@@ -282,6 +282,14 @@ def run_mirror(tables: Path, source="0", use_motors: bool = False,
     # 1.0 and makes every triangulated distance 20x too small.
     cfg_path = config or (str(yaml) if yaml.exists() else None)
     cfg = get_perception_config(cfg_path)
+    # camera.read_oriented resolves camera_rotate_180 from the DEFAULT yaml,
+    # independently of whatever config the caller loaded. Pass --config with a
+    # different orientation and the frame rotation would disagree with the
+    # triangulation -- and a 180 degree rotation swaps which half of the
+    # side-by-side frame belongs to which physical camera, so the stereo
+    # baseline inverts and every 3-D estimate is geometrically wrong while
+    # still looking plausible. Bind them together explicitly.
+    set_camera_orientation(cfg.camera_rotate_180)
     print(f"  perception: units_to_meters={cfg.units_to_meters} "
           f"rotation={cfg.rotation_angle_deg} rotate180={cfg.camera_rotate_180}")
 
