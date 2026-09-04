@@ -35,6 +35,7 @@ class MotionBehavior(Enum):
     SLOW_BREATHE = "<slow_breathe>"
     NORMAL_BREATHE = "<normal_breathe>"
     ARCHED = "<arched>"
+    UNARCH = "<unarch>"
     SIDE_SIDE = "<side_side>"
     SIDE_SIDE_FAST = "<side_side_fast>"
     GRAB = "<grab_object>"
@@ -449,14 +450,14 @@ class SideSideConfig:
     """
 
     amplitude: float = 0.15          # cursor magnitude of the sweep
-    sweep_s: float = 3.0             # extreme to extreme
+    sweep_s: float = 1.75             # extreme to extreme
     retreat: float = 0.30            # how far back it pulls, as a fraction
     overshoot: float = 0.20          # how far past the extreme it then goes
     # Separate multipliers so the two halves of the flourish can differ. Equal
     # values give one continuous gesture at a constant pace; a higher
     # overshoot_mult makes the retreat a wind-up that the overshoot cracks
     # through, which reads as a snap rather than a sway.
-    retreat_mult: float = 3.0        # retreat speed, x the sweep's pace
+    retreat_mult: float = 2.0        # retreat speed, x the sweep's pace
     overshoot_mult: float = 3.0      # overshoot speed, x the sweep's pace
     cycles: int = 2                  # per invocation; bounds reaction lag
     direction_deg: float = 60.0      # perpendicular to motor 2: left/right
@@ -466,7 +467,7 @@ class SideSideConfig:
 SIDE_SIDE_CONFIG = SideSideConfig()
 # EXCITED: the same shape with more energy. Wider, quicker, and a gentler
 # multiplier so the beat keeps enough points to read at the shorter sweep.
-SIDE_SIDE_FAST_CONFIG = SideSideConfig(amplitude=0.18, sweep_s=1.0,
+SIDE_SIDE_FAST_CONFIG = SideSideConfig(amplitude=0.18, sweep_s=0.8,
                                        retreat_mult=2.0,
                                        overshoot_mult=2.0)
 GRAB_CONFIG = GrabMotionConfig()
@@ -906,6 +907,40 @@ def perform_arched_motion(
         time.sleep(cfg.time_per_point)
 
 
+def perform_unarch_motion(
+    motor_controller: MotorController,
+    calibrated_ticks_map: Dict[str, int],
+    noise_scale: float = 0.0,
+) -> None:
+    """Ramp back from the arch to neutral, mirroring perform_arched_motion.
+
+    The arch takes 1.5 s to reach its pose and release_object put it back in a
+    single command -- 699 ticks in one step, whose effective rate depends only
+    on when the next command happens to land. The static check flagged it at 15x
+    the servo ceiling, which is what a jump looks like when it is measured
+    rather than assumed.
+
+    ASSUMES IT STARTS FROM THE ARCH POSE, because it exists only as arched's
+    exit. Called from anywhere else it would first snap out to the arch and then
+    ramp back, which is worse than what it replaces.
+    """
+    cfg = ARCHED_CONFIG
+    d = np.array([np.cos(np.radians(cfg.direction_deg)),
+                  np.sin(np.radians(cfg.direction_deg))])
+    peak = cfg.offset_ticks / float(MOTOR_ONE_FULL_TURN_TICKS)
+    steps = max(2, int(round(cfg.ramp_s / cfg.time_per_point)))
+    logger.info("Unarching from %d ticks over %.1fs", cfg.offset_ticks, cfg.ramp_s)
+    for i in range(steps, -1, -1):
+        target_positions, _ = cursor_to_motor_positions(
+            cursor_pos=d * (peak * i / steps),
+            calibrated_ticks_map=calibrated_ticks_map,
+            noise_scale=noise_scale,
+            cursor_deadzone=1e-6,
+        )
+        motor_controller.set_positions(target_positions)
+        time.sleep(cfg.time_per_point)
+
+
 def perform_grab_motion(
     motor_controller: MotorController,
     calibrated_ticks_map: Dict[str, int],
@@ -1048,6 +1083,13 @@ def execute_behavior(
                 motor_controller,
                 calibrated_ticks_map,
                 noise_scale=noise_scale,
+            )
+            behaviors_performed = True
+            reset_after_sequence = True
+
+        elif behavior == MotionBehavior.UNARCH:
+            perform_unarch_motion(
+                motor_controller, calibrated_ticks_map, noise_scale=noise_scale,
             )
             behaviors_performed = True
             reset_after_sequence = True

@@ -104,7 +104,7 @@ ONE_SHOT = {"YES", "NO"}
 # curled pose with nothing ever releasing, and char_primitive_sweep's own
 # safety note calls grab "38.5 mm of cable out of two motors at once, fast,
 # which is exactly how wire comes off a roller when there is no tension on it".
-HOLDS = {"grab_object": "release_object", "arched": "release_object"}
+HOLDS = {"grab_object": "release_object", "arched": "unarch"}
 
 # Pause between repeats of a looping body, ON TOP of what execute_behavior
 # already imposes: it ends every non-holding primitive with a reset to the
@@ -124,11 +124,18 @@ def body_for(state: str, states_rows: list[dict]) -> BodyAction:
     second mapping in code keeps the table the single source of truth -- the
     same reason the transitions are parsed rather than transcribed.
     """
+    from ..control.primitives import MotionBehavior
+
     row = next((r for r in states_rows if r.get("State") == state), None)
     body = (row or {}).get("Body", "") or ""
-    tokens = [t.strip('"“”’\' ') for t in body.split()]
-    prim = next((t for t in tokens if t and t.islower() and "_" in t or
-                 t in {"yes", "no", "shake", "circle"}), None)
+    # Match against the primitives that actually EXIST rather than guessing at
+    # the shape of a name. The first version looked for a lowercase token
+    # containing an underscore, which silently missed `arched` -- SAD and ANGRY
+    # resolved to no body at all and would have stood still. MotionBehavior is
+    # the authority on what is a primitive, so a new one works here for free.
+    known = {b.value.strip("<>") for b in MotionBehavior}
+    tokens = [t.strip('"“”’\'.,') for t in body.split()]
+    prim = next((t for t in tokens if t in known), None)
     hold = prim in HOLDS
     return BodyAction(state=state, primitive=prim,
                       loop=state not in ONE_SHOT and not hold,
@@ -187,16 +194,23 @@ class MotionWorker:
         The default is generous rather than tight for that reason. If it does
         time out, say so -- a silent overrun is the thing being guarded against.
         """
-        # Release a held grip first. Exiting with the tentacle curled leaves
-        # tension on the tendons with nothing driving them.
-        if self.current is not None and self.current.on_exit:
-            self._play(self.current.on_exit)
+        # JOIN BEFORE RELEASING. This used to play the release first, from the
+        # caller's thread, while the worker could still be mid-primitive -- so
+        # the arch ramp and the unarch ramp interleaved, two threads issuing
+        # conflicting positions down one bus. The bus lock serialises the
+        # writes but cannot stop the COMMANDS alternating, which the static
+        # check saw as a 570-tick step at 3.2M ticks/s.
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=timeout)
             if self._thread.is_alive():
                 print(f"\n  ! motion thread still running after {timeout:.0f}s; "
                       f"the body may still be moving")
+        # Now that nothing else is driving the motors, undo a held pose.
+        # Exiting arched or grabbed leaves tension on the tendons with nothing
+        # holding it.
+        if self.current is not None and self.current.on_exit:
+            self._play(self.current.on_exit)
 
     def _play(self, primitive: str) -> bool:
         from ..control.primitives import MotionBehavior, execute_behavior
