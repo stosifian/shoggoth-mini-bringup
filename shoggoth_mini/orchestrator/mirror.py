@@ -169,14 +169,30 @@ class MotionWorker:
             pass
         self._mail.put_nowait(action)
 
-    def stop(self) -> None:
-        # Release a held grip before shutting down. Exiting with the tentacle
-        # curled leaves tension on the tendons with nothing driving them.
+    def stop(self, timeout: float = 30.0) -> None:
+        """Stop, and do not return until the body has actually stopped moving.
+
+        Primitives are blocking sleep-loops with no cancellation, so setting the
+        flag only prevents the NEXT one starting -- the current one runs to
+        completion. slow_breathe is about 20 s. A short join therefore returns
+        while the tentacle is still moving, which is merely untidy in a viewer
+        and actively wrong anywhere that then measures position or drops the
+        bus: net drift read mid-motion is meaningless, and disconnecting under
+        a live primitive leaves commands in flight.
+
+        The default is generous rather than tight for that reason. If it does
+        time out, say so -- a silent overrun is the thing being guarded against.
+        """
+        # Release a held grip first. Exiting with the tentacle curled leaves
+        # tension on the tendons with nothing driving them.
         if self.current is not None and self.current.on_exit:
             self._play(self.current.on_exit)
         self._stop.set()
         if self._thread:
-            self._thread.join(timeout=3.0)
+            self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                print(f"\n  ! motion thread still running after {timeout:.0f}s; "
+                      f"the body may still be moving")
 
     def _play(self, primitive: str) -> bool:
         from ..control.primitives import MotionBehavior, execute_behavior
