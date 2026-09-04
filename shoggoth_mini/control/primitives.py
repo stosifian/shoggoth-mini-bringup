@@ -430,21 +430,34 @@ class SideSideConfig:
     velocity at each. execute_behavior's reset afterwards is then a no-op rather
     than a visible snap.
 
-    Segments are a list of (target as a fraction of amplitude, duration) rather
-    than a closed form, because every number here is one a person chose: 0.8 is
-    the retreat, 1.2 the overshoot, and the durations follow from speed_mult.
-    A sum of sinusoids would bury all three in phase relationships.
+    Retreat and overshoot are separate: it pulls back 30% and then goes 20%
+    PAST the extreme, so the two beats cover 0.30 and 0.50 of the amplitude.
+    Their durations are proportional to those distances, which is what keeps
+    both at the same speed -- a shared duration would have made the overshoot
+    travel 1.7x further in the same time and read as a lunge rather than the
+    second half of one gesture.
 
-    The fast beat is short by construction -- wobble/speed_mult of a sweep -- so
-    it is worth checking it still gets enough command points to be traced rather
-    than approximated. At these values it gets 10; below about 5 the servo
-    receives a shrug instead of a tick.
+    Segments are a list of (target as a fraction of amplitude, duration) rather
+    than a closed form, because every number here is one a person chose: 0.70
+    the retreat, 1.20 the overshoot, durations following from speed_mult. A sum
+    of sinusoids would bury all three in phase relationships.
+
+    The beats are short by construction -- distance/mult of a sweep -- so
+    it is worth checking they still get enough command points to be traced
+    rather than approximated. At these values they get 15 and 25; below about 5
+    the servo receives a shrug instead of a tick.
     """
 
     amplitude: float = 0.15          # cursor magnitude of the sweep
     sweep_s: float = 3.0             # extreme to extreme
-    wobble: float = 0.20             # retreat and overshoot, as a fraction
-    speed_mult: float = 3.0          # how much faster the flourish is
+    retreat: float = 0.30            # how far back it pulls, as a fraction
+    overshoot: float = 0.20          # how far past the extreme it then goes
+    # Separate multipliers so the two halves of the flourish can differ. Equal
+    # values give one continuous gesture at a constant pace; a higher
+    # overshoot_mult makes the retreat a wind-up that the overshoot cracks
+    # through, which reads as a snap rather than a sway.
+    retreat_mult: float = 3.0        # retreat speed, x the sweep's pace
+    overshoot_mult: float = 3.0      # overshoot speed, x the sweep's pace
     cycles: int = 2                  # per invocation; bounds reaction lag
     direction_deg: float = 60.0      # perpendicular to motor 2: left/right
     time_per_point: float = 0.02
@@ -454,7 +467,8 @@ SIDE_SIDE_CONFIG = SideSideConfig()
 # EXCITED: the same shape with more energy. Wider, quicker, and a gentler
 # multiplier so the beat keeps enough points to read at the shorter sweep.
 SIDE_SIDE_FAST_CONFIG = SideSideConfig(amplitude=0.18, sweep_s=1.8,
-                                       speed_mult=2.0)
+                                       retreat_mult=2.0,
+                                       overshoot_mult=2.0)
 GRAB_CONFIG = GrabMotionConfig()
 RELEASE_CONFIG = ReleaseMotionConfig()
 HIGH_FIVE_CONFIG = HighFiveMotionConfig()
@@ -814,16 +828,22 @@ def max_grab_magnitude(calibrated_ticks_map: Dict[str, int],
 
 
 def side_side_segments(cfg: SideSideConfig):
-    """(target fraction, duration) from neutral, tick-tock, back to neutral."""
-    tw = cfg.sweep_s * cfg.wobble / cfg.speed_mult
+    """(target fraction, duration) from neutral, tick-tock, back to neutral.
+
+    Both beat durations are distance/speed_mult scaled by the sweep, so the
+    retreat and the overshoot travel at the same pace even though the overshoot
+    covers further ground.
+    """
+    t_ret = cfg.sweep_s * cfg.retreat / cfg.retreat_mult
+    t_over = cfg.sweep_s * (cfg.retreat + cfg.overshoot) / cfg.overshoot_mult
     segs = [(+1.0, cfg.sweep_s / 2)]                      # lead in from centre
     for i in range(max(1, cfg.cycles)):
-        segs += [(+1.0 - cfg.wobble, tw), (+1.0 + cfg.wobble, tw)]
+        segs += [(+1.0 - cfg.retreat, t_ret), (+1.0 + cfg.overshoot, t_over)]
         segs += [(-1.0, cfg.sweep_s)]
-        segs += [(-1.0 + cfg.wobble, tw), (-1.0 - cfg.wobble, tw)]
+        segs += [(-1.0 + cfg.retreat, t_ret), (-1.0 - cfg.overshoot, t_over)]
         segs += ([(0.0, cfg.sweep_s / 2)] if i == cfg.cycles - 1
                  else [(+1.0, cfg.sweep_s)])
-    return segs, tw
+    return segs, (t_ret, t_over)
 
 
 def perform_side_side_motion(
