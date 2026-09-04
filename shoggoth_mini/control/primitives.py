@@ -386,19 +386,20 @@ class ArchedConfig:
     whole point is a held posture it is both the wrong shape and the closest
     thing in the set to the encoder end stop.
 
-    This is the opposite: a FIXED 500 ticks, reached by a linear ramp over 1.5 s.
-    Fixed rather than derived because the pose is the point -- at 500 ticks it
-    sits 2495 ticks clear of the range at today's zeros and would still be clear
-    after 2000 ticks of retension drift, so it needs no cap to stay safe.
+    This is the opposite: a FIXED 700 ticks, reached by a linear ramp over 1.5 s.
+    Fixed rather than derived because the pose is the point -- at 700 ticks it
+    sits 528 ticks clear of the range at today's zeros and would still be clear
+    after 500 ticks of retension drift, so it needs no cap to stay safe. Should
+    the zeros ever climb that far, check_limits reports it before anything moves.
 
-    Peak rate is 500/1.5 = 333 ticks/s, about 4% of the servo ceiling and the
-    gentlest motion in the set apart from the breaths.
+    Peak rate is 700/1.5 = 467 ticks/s, about 6% of the servo ceiling and among
+    the gentlest motions in the set.
 
     Holds when it finishes, like grab: MotionWorker plays the release when the
     state changes.
     """
 
-    offset_ticks: int = 500
+    offset_ticks: int = 700
     ramp_s: float = 1.5
     direction_deg: float = 330.0     # motor 2's axis, as slow_breathe uses
     time_per_point: float = 0.02
