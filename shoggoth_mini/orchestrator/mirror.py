@@ -307,8 +307,24 @@ def run_mirror(tables: Path, source="0", use_motors: bool = False,
 
     mc = None
     if use_motors:
+        from ..configs import get_hardware_config
         from ..hardware.motors import MotorController
-        mc = MotorController()
+
+        # MotorController() with no config builds HardwareConfig() from pydantic
+        # defaults, NOT from the YAML -- the same trap as get_perception_config
+        # with no argument. It matters more here: the default tick_sign is +1
+        # against the YAML's -1, so every commanded direction would be reversed,
+        # and the range guards would not notice because the positions are legal,
+        # merely mirrored. The default port is also empty.
+        hw_yaml = pkg / "configs" / "default_hardware.yaml"
+        hw = get_hardware_config(str(hw_yaml) if hw_yaml.exists() else None)
+        if not hw.port:
+            raise SystemExit(
+                "no motor port configured. Expected it in "
+                f"{hw_yaml}; refusing to guess.")
+        mc = MotorController(hw)
+        print(f"  motors: port {hw.port} tick_sign {hw.tick_sign} "
+              f"settle {hw.motor_settle_time}s")
         mc.connect()
         print("  motors: CONNECTED")
     else:
