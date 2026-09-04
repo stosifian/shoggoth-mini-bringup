@@ -70,7 +70,20 @@ class NoMotionConfig:
     left_position: np.ndarray = field(default_factory=lambda: np.array([0.15, 0.0]))
     down_position: np.ndarray = field(default_factory=lambda: np.array([0.12, -0.08]))
     right_position: np.ndarray = field(default_factory=lambda: np.array([-0.0, -0.15]))
-    initial_delay: float = 0.05
+    # The lead-in move, not a pause: it is the sleep AFTER the first
+    # set_positions, so it is the time that step has to complete in.
+    #
+    # It was 0.05, which asked 839 ticks in 50 ms = ~16,800 ticks/s against a
+    # measured servo ceiling of ~7,600 (char_primitive_sweep, 2026-09-04). At
+    # more than twice the ceiling the move is still in flight when the next
+    # command lands, so the shape came from servo dynamics rather than from the
+    # waypoints -- the same defect slow_circle was reworked for.
+    #
+    # 0.13 matches hold_duration and gives ~6,450 ticks/s. The minimum that
+    # clears the ceiling is 839/7600 = 0.11 s, so this leaves margin. The cost
+    # is 80 ms of extra lead-in, which is nothing beside the seconds of
+    # perception and gesture latency ahead of it.
+    initial_delay: float = 0.13
     hold_duration: float = 0.13
 
 

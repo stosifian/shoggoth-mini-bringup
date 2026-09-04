@@ -86,12 +86,30 @@ class BodyAction:
     state: str
     primitive: Optional[str]
     loop: bool = True
+    on_exit: Optional[str] = None
     sound: Optional[str] = None
 
 
 # States that punctuate rather than persist: they play once and hand the body
 # back. Everything else loops for as long as the machine stays in it.
 ONE_SHOT = {"YES", "NO"}
+
+# Primitives that END somewhere rather than returning to neutral, and what
+# undoes them. This is a property of the PRIMITIVE, not of the state that asks
+# for it -- execute_behavior already says the same thing by setting
+# reset_after_sequence = False for grab. Deriving it here means a state mapped
+# to grab later gets the right treatment without anyone remembering to say so.
+#
+# Looping a hold would be actively dangerous: it re-curls from an already
+# curled pose with nothing ever releasing, and char_primitive_sweep's own
+# safety note calls grab "38.5 mm of cable out of two motors at once, fast,
+# which is exactly how wire comes off a roller when there is no tension on it".
+HOLDS = {"grab_object": "release_object"}
+
+# Pause between repeats of a looping body. Without it the worker re-fires as
+# soon as its mailbox poll times out, 0.1 s later, which reads as relentless
+# rather than alive.
+LOOP_GAP_S = 0.6
 
 
 def body_for(state: str, states_rows: list[dict]) -> BodyAction:
@@ -107,8 +125,10 @@ def body_for(state: str, states_rows: list[dict]) -> BodyAction:
     tokens = [t.strip('"“”’\' ') for t in body.split()]
     prim = next((t for t in tokens if t and t.islower() and "_" in t or
                  t in {"yes", "no", "shake", "circle"}), None)
+    hold = prim in HOLDS
     return BodyAction(state=state, primitive=prim,
-                      loop=state not in ONE_SHOT)
+                      loop=state not in ONE_SHOT and not hold,
+                      on_exit=HOLDS.get(prim))
 
 
 # =============================================================================
@@ -150,16 +170,40 @@ class MotionWorker:
         self._mail.put_nowait(action)
 
     def stop(self) -> None:
+        # Release a held grip before shutting down. Exiting with the tentacle
+        # curled leaves tension on the tendons with nothing driving them.
+        if self.current is not None and self.current.on_exit:
+            self._play(self.current.on_exit)
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=3.0)
 
-    def _run(self) -> None:
+    def _play(self, primitive: str) -> bool:
         from ..control.primitives import MotionBehavior, execute_behavior
+        behaviour = MotionBehavior.from_action_string(f"<{primitive}>")
+        if behaviour is None:
+            return False
+        if self.dry_run or self.mc is None:
+            time.sleep(0.4)                    # stand in for the motion
+            return True
+        try:
+            execute_behavior(self.mc, behaviour, noise_scale=0.0)
+            return True
+        except Exception as exc:               # a failed motion is not fatal
+            print(f"\n  ! motion {primitive} failed: {exc}")
+            time.sleep(0.2)
+            return False
+
+    def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                self.current = self._mail.get(timeout=0.1)
-                self.plays = 0
+                nxt = self._mail.get(timeout=0.1)
+                # Undo a hold before doing anything else. SAD and ANGRY grab and
+                # stay grabbed; leaving them has to let go, or the next state's
+                # motion plays from a curled pose.
+                if self.current is not None and self.current.on_exit:
+                    self._play(self.current.on_exit)
+                self.current, self.plays = nxt, 0
             except queue.Empty:
                 if self.current is None or not self.current.loop:
                     continue
@@ -167,19 +211,10 @@ class MotionWorker:
             if act is None or act.primitive is None:
                 time.sleep(0.05)
                 continue
-            behaviour = MotionBehavior.from_action_string(f"<{act.primitive}>")
-            if behaviour is None:
-                time.sleep(0.1)
-                continue
             self.plays += 1
-            if self.dry_run or self.mc is None:
-                time.sleep(0.4)                # stand in for the motion
-                continue
-            try:
-                execute_behavior(self.mc, behaviour, noise_scale=0.0)
-            except Exception as exc:           # a failed motion is not fatal
-                print(f"\n  ! motion {act.primitive} failed: {exc}")
-                time.sleep(0.2)
+            self._play(act.primitive)
+            if act.loop:
+                time.sleep(LOOP_GAP_S)
 
 
 # =============================================================================
