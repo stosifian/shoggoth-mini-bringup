@@ -44,6 +44,8 @@ robot acted on, which is why the plotter shades by the logged column.
 from __future__ import annotations
 
 import csv
+import shutil
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -70,6 +72,29 @@ FACE_LIMITS = {a: {"clip_min": -3.0, "clip_max": 3.0} for a in "XYZ"}
 
 GESTURE_BUFFER_S = 4.0      # history kept for the gesture detector
 
+# Sound. A clip named after the primitive plays alongside it -- yes.m4a with the
+# yes nod, no.m4a with the shake -- so adding one is dropping a file in, with no
+# table or code change.
+#
+# afplay rather than a library: it ships with macOS and decodes m4a natively,
+# which pygame's mixer does not ("Unrecognized audio format"). Converting the
+# clips to wav would work too, but a subprocess that is guaranteed present beats
+# a dependency plus a conversion step. If this ever needs to run off a Mac, that
+# is the point to revisit.
+AUDIO_DIR = Path(__file__).resolve().parents[1].parent / "assets" / "audio"
+AUDIO_EXTS = (".m4a", ".wav", ".mp3", ".aiff", ".aif", ".ogg")
+
+
+def sound_for(primitive: Optional[str]) -> Optional[Path]:
+    """The clip that goes with a primitive, if there is one."""
+    if not primitive or not AUDIO_DIR.is_dir():
+        return None
+    for ext in AUDIO_EXTS:
+        p = AUDIO_DIR / f"{primitive}{ext}"
+        if p.exists():
+            return p
+    return None
+
 
 # =============================================================================
 # what a state asks the body to do
@@ -78,9 +103,9 @@ GESTURE_BUFFER_S = 4.0      # history kept for the gesture detector
 class BodyAction:
     """A state's motion, as data rather than a primitive name.
 
-    `sound` is unused in v1 and present on purpose: yes/no acknowledgements are
-    meant to gain audio, and threading a second field through the worker later
-    is more disruptive than carrying an unused one now.
+    `sound` is a path to a clip played alongside the primitive, or None. It was
+    carried unused through v1 precisely so adding audio would not mean threading
+    a new field through the worker.
     """
     state: str
     primitive: Optional[str]
@@ -136,9 +161,11 @@ def body_for(state: str, states_rows: list[dict]) -> BodyAction:
     tokens = [t.strip('"“”’\'.,') for t in body.split()]
     prim = next((t for t in tokens if t in known), None)
     hold = prim in HOLDS
+    clip = sound_for(prim)
     return BodyAction(state=state, primitive=prim,
                       loop=state not in ONE_SHOT and not hold,
-                      on_exit=HOLDS.get(prim))
+                      on_exit=HOLDS.get(prim),
+                      sound=str(clip) if clip else None)
 
 
 # =============================================================================
@@ -191,6 +218,7 @@ class MotionWorker:
         self._thread: Optional[threading.Thread] = None
         self.current: Optional[BodyAction] = None
         self.plays = 0
+        self._audio: Optional[subprocess.Popen] = None
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True,
@@ -244,6 +272,7 @@ class MotionWorker:
             if self._thread.is_alive():
                 print(f"\n  ! motion thread still running after {timeout:.0f}s; "
                       f"the body may still be moving")
+        self._stop_sound()
         # Now that nothing else is driving the motors, undo a held pose.
         # _resume may hold the body underneath a gesture; it never has an
         # on_exit, so only `current` can be a hold.
@@ -251,6 +280,32 @@ class MotionWorker:
         # holding it.
         if self.current is not None and self.current.on_exit:
             self._play(self.current.on_exit)
+
+    def _play_sound(self, path: Optional[str]) -> None:
+        """Start a clip alongside the motion. Fire and forget, never blocking.
+
+        Sound has to begin WITH the movement, so this cannot be awaited on the
+        motion thread -- a 1.6 s clip would delay the gesture by its own length.
+        Any still-playing clip is stopped first: overlapping acknowledgements
+        would be worse than a truncated one.
+        """
+        if not path:
+            return
+        player = shutil.which("afplay")
+        if player is None:
+            return
+        self._stop_sound()
+        try:
+            self._audio = subprocess.Popen(
+                [player, path], stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL)
+        except Exception as exc:               # audio is never worth a crash
+            print(f"\n  ! could not play {path}: {exc}")
+
+    def _stop_sound(self) -> None:
+        if self._audio is not None and self._audio.poll() is None:
+            self._audio.terminate()
+        self._audio = None
 
     def _play(self, primitive: str) -> bool:
         from ..control.primitives import MotionBehavior, execute_behavior
@@ -320,6 +375,8 @@ class MotionWorker:
                 continue
             self._interrupt.clear()            # fresh play, fresh flag
             self.plays += 1
+            if self.plays == 1:                # once per entry, not per repeat
+                self._play_sound(act.sound)
             self._play(act.primitive)
             if act.loop:
                 time.sleep(LOOP_GAP_S)
