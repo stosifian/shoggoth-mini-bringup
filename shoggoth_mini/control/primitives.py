@@ -35,6 +35,8 @@ class MotionBehavior(Enum):
     SLOW_BREATHE = "<slow_breathe>"
     NORMAL_BREATHE = "<normal_breathe>"
     ARCHED = "<arched>"
+    SIDE_SIDE = "<side_side>"
+    SIDE_SIDE_FAST = "<side_side_fast>"
     GRAB = "<grab_object>"
     RELEASE = "<release_object>"
     HIGH_FIVE = "<high_five>"
@@ -403,6 +405,55 @@ class ArchedConfig:
 
 
 ARCHED_CONFIG = ArchedConfig()
+
+
+@dataclass
+class SideSideConfig:
+    """A tick-tock sway: sweep to one side, then a fast retreat and overshoot.
+
+    Anticipation and overshoot, which is what makes a movement read as intended
+    rather than merely executed. The sweep is a raised cosine, so it arrives at
+    each extreme with zero velocity; the flourish then punctuates that pause
+    with a beat at `speed_mult` times the sweep's pace. The eye reads the CHANGE
+    in speed more than the distance, which is why a 20% wobble is legible while
+    covering a fifth of the sweep.
+
+    LEFT-RIGHT, not fore-aft. `direction_deg` 60 is perpendicular to motor 2's
+    axis, so motor 2 stays exactly still (alignment 0.000) and motors 1 and 3
+    oppose each other at +/-0.866. Using motor 2's own axis, as the breaths do,
+    would be a nod rather than a sway.
+
+    STARTS AND ENDS AT NEUTRAL, which is what makes it loop. It leads in from
+    centre over half a sweep and leads out the same way, so the last command of
+    one play and the first of the next are both the calibrated pose, with zero
+    velocity at each. execute_behavior's reset afterwards is then a no-op rather
+    than a visible snap.
+
+    Segments are a list of (target as a fraction of amplitude, duration) rather
+    than a closed form, because every number here is one a person chose: 0.8 is
+    the retreat, 1.2 the overshoot, and the durations follow from speed_mult.
+    A sum of sinusoids would bury all three in phase relationships.
+
+    The fast beat is short by construction -- wobble/speed_mult of a sweep -- so
+    it is worth checking it still gets enough command points to be traced rather
+    than approximated. At these values it gets 10; below about 5 the servo
+    receives a shrug instead of a tick.
+    """
+
+    amplitude: float = 0.15          # cursor magnitude of the sweep
+    sweep_s: float = 3.0             # extreme to extreme
+    wobble: float = 0.20             # retreat and overshoot, as a fraction
+    speed_mult: float = 3.0          # how much faster the flourish is
+    cycles: int = 2                  # per invocation; bounds reaction lag
+    direction_deg: float = 60.0      # perpendicular to motor 2: left/right
+    time_per_point: float = 0.02
+
+
+SIDE_SIDE_CONFIG = SideSideConfig()
+# EXCITED: the same shape with more energy. Wider, quicker, and a gentler
+# multiplier so the beat keeps enough points to read at the shorter sweep.
+SIDE_SIDE_FAST_CONFIG = SideSideConfig(amplitude=0.18, sweep_s=1.8,
+                                       speed_mult=2.0)
 GRAB_CONFIG = GrabMotionConfig()
 RELEASE_CONFIG = ReleaseMotionConfig()
 HIGH_FIVE_CONFIG = HighFiveMotionConfig()
@@ -761,6 +812,54 @@ def max_grab_magnitude(calibrated_ticks_map: Dict[str, int],
     return max(0.0, min(caps)) if caps else 0.0
 
 
+def side_side_segments(cfg: SideSideConfig):
+    """(target fraction, duration) from neutral, tick-tock, back to neutral."""
+    tw = cfg.sweep_s * cfg.wobble / cfg.speed_mult
+    segs = [(+1.0, cfg.sweep_s / 2)]                      # lead in from centre
+    for i in range(max(1, cfg.cycles)):
+        segs += [(+1.0 - cfg.wobble, tw), (+1.0 + cfg.wobble, tw)]
+        segs += [(-1.0, cfg.sweep_s)]
+        segs += [(-1.0 + cfg.wobble, tw), (-1.0 - cfg.wobble, tw)]
+        segs += ([(0.0, cfg.sweep_s / 2)] if i == cfg.cycles - 1
+                 else [(+1.0, cfg.sweep_s)])
+    return segs, tw
+
+
+def perform_side_side_motion(
+    motor_controller: MotorController,
+    calibrated_ticks_map: Dict[str, int],
+    cfg: SideSideConfig = None,
+    *,
+    noise_scale: float = 0.0,
+) -> None:
+    """Play the tick-tock sway described by `cfg`."""
+    cfg = cfg or SIDE_SIDE_CONFIG
+    segs, _ = side_side_segments(cfg)
+    d = np.array([np.cos(np.radians(cfg.direction_deg)),
+                  np.sin(np.radians(cfg.direction_deg))])
+    cur = 0.0
+    for target, dur in segs:
+        n = max(2, int(round(dur / cfg.time_per_point)))
+        for i in range(1, n + 1):
+            # raised cosine: zero velocity at both ends of every segment, so
+            # the joins cannot jerk -- and this reverses direction twice at
+            # each extreme, which is exactly where a corner would show
+            ease = (1.0 - np.cos(np.pi * i / n)) / 2.0
+            frac = cur + (target - cur) * ease
+            target_positions, _ = cursor_to_motor_positions(
+                cursor_pos=d * cfg.amplitude * frac,
+                calibrated_ticks_map=calibrated_ticks_map,
+                noise_scale=noise_scale,
+                # the sweep passes through zero twice a cycle, well inside the
+                # default 0.01 deadzone, which would flatten the middle of every
+                # traverse to the calibrated pose
+                cursor_deadzone=1e-6,
+            )
+            motor_controller.set_positions(target_positions)
+            time.sleep(cfg.time_per_point)
+        cur = target
+
+
 def perform_arched_motion(
     motor_controller: MotorController,
     calibrated_ticks_map: Dict[str, int],
@@ -928,6 +1027,22 @@ def execute_behavior(
                 motor_controller,
                 calibrated_ticks_map,
                 noise_scale=noise_scale,
+            )
+            behaviors_performed = True
+            reset_after_sequence = True
+
+        elif behavior == MotionBehavior.SIDE_SIDE:
+            perform_side_side_motion(
+                motor_controller, calibrated_ticks_map,
+                SIDE_SIDE_CONFIG, noise_scale=noise_scale,
+            )
+            behaviors_performed = True
+            reset_after_sequence = True
+
+        elif behavior == MotionBehavior.SIDE_SIDE_FAST:
+            perform_side_side_motion(
+                motor_controller, calibrated_ticks_map,
+                SIDE_SIDE_FAST_CONFIG, noise_scale=noise_scale,
             )
             behaviors_performed = True
             reset_after_sequence = True
