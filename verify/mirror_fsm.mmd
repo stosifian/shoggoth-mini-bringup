@@ -12,20 +12,19 @@ stateDiagram-v2
     [*] --> ALONE
     ALONE --> NOTICING: r2 p3 x1 - Face == 1 > 1 second
     NOTICING --> NEUTRAL: r3 p3 x2 - Attention == 1 for > 1.5 seconds
-    NEUTRAL --> CONTENT: r4 p3 x0 - Content == 1 for > 1.5 seconds & Face == 1
-    NEUTRAL --> EXCITED: r5 p3 x0 - Excited == 1 for > 1.5 seconds & Face == 1
-    NEUTRAL --> SAD: r6 p3 x0 - Sad == 1 for > 1.5 seconds & Face == 1
-    NEUTRAL --> ANGRY: r7 p3 x0 - Angry == 1 for > 1.5 seconds & Face == 1
-    CONTENT --> EXCITED: r8 p3 x0 - Excited == 1 for > 1 second & Face == 1
-    EXCITED --> NEUTRAL: r9 p3 x0 - Neutral == 1 for > 1 second & Face == 1
-    CONTENT --> NEUTRAL: r10 p3 x0 - Neutral == 1 for > 1 second & Face == 1
-    SAD --> NEUTRAL: r11 p3 x0 - Neutral == 1 for > 1 second & Face == 1
-    ANGRY --> NEUTRAL: r12 p3 x0 - Neutral == 1 for > 1 second & Face == 1
-    ANY --> YES: r13 p1 x1 - Yes == 1 for > 500 ms
-    ANY --> NO: r14 p1 x0 - No == 1 is detected for > 500 ms
-    YES --> PREV: r15 p3 x1 - Return to state machine was in before YES after min ...
-    NO --> PREV: r16 p3 x0 - Return to state machine was in before NO after min d...
-    ANY --> ALONE: r17 p2 x0 - Face == 0 for > 1.5 seconds
-    ANY --> NOTICING: r18 p2 x2 - Face == 1 > 1.5 seconds and Attention == 0 for > 1.5...
+    EXCITED --> NEUTRAL: r4 p3 x1 - Neutral == 1 for > 1 second & Face == 1
+    CONTENT --> NEUTRAL: r5 p3 x0 - Neutral == 1 for > 1 second & Face == 1
+    SAD --> NEUTRAL: r6 p3 x0 - Neutral == 1 for > 1 second & Face == 1
+    ANGRY --> NEUTRAL: r7 p3 x1 - Neutral == 1 for > 1 second & Face == 1
+    ANY --> CONTENT: r8 p3 x1 - Content == 1 for > 1.5 seconds & Face == 1
+    ANY --> EXCITED: r9 p3 x2 - Excited == 1 for > 1.5 seconds & Face == 1
+    ANY --> SAD: r10 p3 x1 - Sad == 1 for > 1.5 seconds & Face == 1
+    ANY --> ANGRY: r11 p3 x2 - Angry == 1 for > 1.5 seconds & Face == 1
+    ANY --> YES: r12 p1 x2 - Yes == 1 for > 500 ms
+    ANY --> NO: r13 p1 x2 - No == 1 is detected for > 500 ms
+    YES --> PREV: r14 p3 x2 - Return to state machine was in before YES after min ...
+    NO --> PREV: r15 p3 x2 - Return to state machine was in before NO after min d...
+    ANY --> ALONE: r16 p2 x0 - Face == 0 for > 1.5 seconds
+    ANY --> NOTICING: r17 p2 x1 - Face == 1 > 1.5 seconds and Attention == 0 for > 1.5...
     ANY: any state, see the row for its exclusions
     PREV: whichever state it came from
