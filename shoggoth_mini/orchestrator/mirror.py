@@ -44,7 +44,6 @@ robot acted on, which is why the plotter shades by the logged column.
 from __future__ import annotations
 
 import csv
-import queue
 import threading
 import time
 from dataclasses import dataclass
@@ -148,9 +147,20 @@ def body_for(state: str, states_rows: list[dict]) -> BodyAction:
 class MotionWorker:
     """Executes body actions without ever blocking perception.
 
-    A one-slot mailbox rather than a queue: if the state changed twice while a
-    primitive was playing, only the current state matters, and a backlog of
-    stale intents is worse than dropping them.
+    TWO slots, not one, because a state and a gesture are different kinds of
+    thing. A state describes how things ARE, so the latest one wins and older
+    ones are rightly discarded. A gesture is an acknowledgement of something a
+    person DID, and dropping it means the robot ignored them.
+
+    A single "latest wins" slot conflated the two, and the first motorised
+    session showed the cost: YES was entered at 79.52 s and left at 80.12 s,
+    exactly its 600 ms min duration, so post(YES) filled the slot and the
+    post(NEUTRAL) that followed discarded it before the worker -- then inside an
+    uninterruptible slow_circle -- had looked. The nod was detected, entered and
+    exited without a single command reaching a motor.
+
+    So gestures land in their own slot, are never overwritten by a state, and
+    play at the first opportunity. The state slot keeps latest-wins.
 
     Primitives are blocking sleep-loops with no notion of cancellation, so a
     change cannot interrupt one mid-motion -- it takes effect at the next
@@ -162,7 +172,16 @@ class MotionWorker:
     def __init__(self, motor_controller=None, dry_run: bool = True):
         self.mc = motor_controller
         self.dry_run = dry_run
-        self._mail: queue.Queue = queue.Queue(maxsize=1)
+        self._lock = threading.Lock()
+        self._pending_state: Optional[BodyAction] = None   # latest wins
+        self._pending_event: Optional[BodyAction] = None   # never discarded
+        self._resume: Optional[BodyAction] = None          # body to return to
+        # Woken by post(). The two slots are checked without blocking, so
+        # without this the idle worker only looks every 50 ms and a stop() can
+        # beat a just-posted gesture to it -- which dropped YES from the
+        # rehearsal. The old single mailbox blocked on get(), so posting always
+        # woke it immediately; this restores that.
+        self._wake = threading.Event()
         self._stop = threading.Event()
         # Set by post() and stop() to cut a primitive short. Primitives that
         # honour it check between command points and ease back to neutral, so a
@@ -178,13 +197,19 @@ class MotionWorker:
                                         name="mirror-motion")
         self._thread.start()
 
+    @staticmethod
+    def _is_event(action: BodyAction) -> bool:
+        """A one-shot with nothing to undo: a gesture, not a state or a hold."""
+        return action.primitive is not None and not action.loop and not action.on_exit
+
     def post(self, action: BodyAction) -> None:
-        try:                                   # latest wins
-            self._mail.get_nowait()
-        except queue.Empty:
-            pass
-        self._mail.put_nowait(action)
+        with self._lock:
+            if self._is_event(action):
+                self._pending_event = action
+            else:
+                self._pending_state = action
         self._interrupt.set()                  # cut short whatever is playing
+        self._wake.set()                       # and look at the slots now
 
     def stop(self, timeout: float = 30.0, interrupt: bool = True) -> None:
         """Stop, and do not return until the body has actually stopped moving.
@@ -207,6 +232,7 @@ class MotionWorker:
         # writes but cannot stop the COMMANDS alternating, which the static
         # check saw as a 570-tick step at 3.2M ticks/s.
         self._stop.set()
+        self._wake.set()
         # interrupt=False lets the body play out, which is what a measurement
         # wants: mirror_rehearsal's static pass has to see the WHOLE primitive
         # to judge its range and rate, and cutting it short reported 23 commands
@@ -219,6 +245,8 @@ class MotionWorker:
                 print(f"\n  ! motion thread still running after {timeout:.0f}s; "
                       f"the body may still be moving")
         # Now that nothing else is driving the motors, undo a held pose.
+        # _resume may hold the body underneath a gesture; it never has an
+        # on_exit, so only `current` can be a hold.
         # Exiting arched or grabbed leaves tension on the tendons with nothing
         # holding it.
         if self.current is not None and self.current.on_exit:
@@ -241,22 +269,54 @@ class MotionWorker:
             time.sleep(0.2)
             return False
 
+    def _take(self):
+        """Next thing to play. Gestures jump the queue; states replace."""
+        with self._lock:
+            if self._pending_event is not None:
+                act, self._pending_event = self._pending_event, None
+                # Remember what to go back to, the way the state machine's
+                # YES/NO rows return to the previous state. Any body that is
+                # not itself a gesture, INCLUDING A HOLD: interrupting arched
+                # and not restoring it would leave `current` as the gesture,
+                # so its on_exit would be lost and nothing would ever unarch.
+                if self.current is not None and not self._is_event(self.current):
+                    self._resume = self.current
+                return act, True
+            if self._pending_state is not None:
+                act, self._pending_state = self._pending_state, None
+                self._resume = None
+                return act, False
+        return None, False
+
     def _run(self) -> None:
         while not self._stop.is_set():
-            try:
-                nxt = self._mail.get(timeout=0.1)
-                # Undo a hold before doing anything else. SAD and ANGRY grab and
-                # stay grabbed; leaving them has to let go, or the next state's
-                # motion plays from a curled pose.
-                if self.current is not None and self.current.on_exit:
+            nxt, is_event = self._take()
+            if nxt is not None:
+                # Undo a hold before anything else. SAD and ANGRY arch and stay
+                # arched; leaving has to unarch, or the next body plays from a
+                # held pose. A gesture does not clear the hold -- it interrupts
+                # and hands back.
+                if not is_event and self.current is not None \
+                        and self.current.on_exit:
                     self._play(self.current.on_exit)
                 self.current, self.plays = nxt, 0
-            except queue.Empty:
-                if self.current is None or not self.current.loop:
+            elif self.current is not None and not self.current.loop:
+                # a one-shot has had its turn; go back to the body underneath it
+                if self._resume is not None:
+                    self.current, self._resume, self.plays = self._resume, None, 0
+                else:
+                    self._wake.wait(0.1)
+                    self._wake.clear()
                     continue
+            elif self.current is None:
+                self._wake.wait(0.1)
+                self._wake.clear()
+                continue
+
             act = self.current
             if act is None or act.primitive is None:
-                time.sleep(0.05)
+                self._wake.wait(0.1)
+                self._wake.clear()
                 continue
             self._interrupt.clear()            # fresh play, fresh flag
             self.plays += 1
