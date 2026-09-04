@@ -186,7 +186,7 @@ class MotionWorker:
         self._mail.put_nowait(action)
         self._interrupt.set()                  # cut short whatever is playing
 
-    def stop(self, timeout: float = 30.0) -> None:
+    def stop(self, timeout: float = 30.0, interrupt: bool = True) -> None:
         """Stop, and do not return until the body has actually stopped moving.
 
         Primitives are blocking sleep-loops with no cancellation, so setting the
@@ -207,7 +207,12 @@ class MotionWorker:
         # writes but cannot stop the COMMANDS alternating, which the static
         # check saw as a 570-tick step at 3.2M ticks/s.
         self._stop.set()
-        self._interrupt.set()
+        # interrupt=False lets the body play out, which is what a measurement
+        # wants: mirror_rehearsal's static pass has to see the WHOLE primitive
+        # to judge its range and rate, and cutting it short reported 23 commands
+        # for motions that issue hundreds. Live operation wants the opposite.
+        if interrupt:
+            self._interrupt.set()
         if self._thread:
             self._thread.join(timeout=timeout)
             if self._thread.is_alive():

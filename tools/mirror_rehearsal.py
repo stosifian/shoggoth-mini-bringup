@@ -148,9 +148,9 @@ def main() -> int:
         if b.on_exit:
             w.post(BodyAction("_after", None))     # forces the release
             time.sleep(0.3)
-        # generous: a primitive cannot be cancelled, and a short wait would
-        # report a half-played motion as if it were the whole thing
-        w.stop(timeout=STOP_TIMEOUT_S)
+        # let it play out: this pass measures the primitive, and an interrupted
+        # one would be reported as if it were the whole motion
+        w.stop(timeout=STOP_TIMEOUT_S, interrupt=False)
         timing[s] = time.time() - t_start
 
         cmds = rec.commands

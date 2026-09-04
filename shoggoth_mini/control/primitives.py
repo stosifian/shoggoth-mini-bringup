@@ -601,34 +601,43 @@ def perform_slow_circle_motion(
     step = 2 * np.pi / cfg.points_per_circle   # angular advance per command
 
     def go(angle, radius):
+        cursor = np.array([radius * np.cos(angle), radius * np.sin(angle)],
+                          dtype=float)
         target_positions, _ = cursor_to_motor_positions(
-            cursor_pos=np.array([radius * np.cos(angle), radius * np.sin(angle)],
-                                dtype=float),
+            cursor_pos=cursor,
             calibrated_ticks_map=calibrated_ticks_map,
             noise_scale=noise_scale,
         )
         motor_controller.set_positions(target_positions)
         time.sleep(cfg.time_per_point)
+        if _stopping(should_stop):
+            # ease out from wherever the circle got to, then unwind: the
+            # callers are loops that would otherwise begin the next leg
+            _ease_to_neutral(motor_controller, calibrated_ticks_map, cursor)
+            raise _Interrupted
 
     angle = 0.0
 
-    # Spiral OUT: advance the angle while growing the radius, so the tentacle
-    # arrives on the circle already moving along it.
-    for k in range(cfg.entry_steps):
-        f = k / cfg.entry_steps
-        go(angle, cfg.min_radius + (cfg.radius - cfg.min_radius) * f)
-        angle += step
-
-    for _ in range(cfg.revolutions):
-        for _i in range(cfg.points_per_circle):
-            go(angle, cfg.radius)
+    try:
+        # Spiral OUT: advance the angle while growing the radius, so the tentacle
+        # arrives on the circle already moving along it.
+        for k in range(cfg.entry_steps):
+            f = k / cfg.entry_steps
+            go(angle, cfg.min_radius + (cfg.radius - cfg.min_radius) * f)
             angle += step
 
-    # Spiral IN, mirroring the entry, ending just inside the deadzone.
-    for k in range(cfg.entry_steps):
-        f = 1.0 - (k + 1) / cfg.entry_steps
-        go(angle, cfg.min_radius + (cfg.radius - cfg.min_radius) * f)
-        angle += step
+        for _ in range(cfg.revolutions):
+            for _i in range(cfg.points_per_circle):
+                go(angle, cfg.radius)
+                angle += step
+
+        # Spiral IN, mirroring the entry, ending just inside the deadzone.
+        for k in range(cfg.entry_steps):
+            f = 1.0 - (k + 1) / cfg.entry_steps
+            go(angle, cfg.min_radius + (cfg.radius - cfg.min_radius) * f)
+            angle += step
+    except _Interrupted:
+        return
 
 
 def perform_wave_packet_am_motion(
@@ -841,6 +850,15 @@ def max_grab_magnitude(calibrated_ticks_map: Dict[str, int],
 # then snap it home in one command, which is the jump the arch already had to be
 # fixed for. 0.3 s at 700 ticks is 2300 ticks/s, well under the ceiling.
 INTERRUPT_EASE_S = 0.30
+
+
+class _Interrupted(Exception):
+    """Unwinds a primitive assembled from a helper called in several loops.
+
+    slow_circle issues every command through a nested `go()`, from three
+    separate loops. Returning from `go` would only end that one command and let
+    the caller start the next leg, so the stop has to propagate.
+    """
 
 
 def _stopping(should_stop) -> bool:
@@ -1177,6 +1195,7 @@ def execute_behavior(
         elif behavior == MotionBehavior.SLOW_BREATHE:
             perform_slow_breathe_motion(
                 motor_controller, calibrated_ticks_map, noise_scale=noise_scale,
+                should_stop=should_stop,
             )
             behaviors_performed = True
             reset_after_sequence = True
