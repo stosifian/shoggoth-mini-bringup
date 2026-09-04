@@ -589,6 +589,7 @@ def perform_slow_circle_motion(
     calibrated_ticks_map: Dict[str, int],
     *,
     noise_scale: float = 0.0,
+    should_stop=None,
 ) -> None:
     """Circular motion at a rate the servos can actually track.
 
@@ -1199,6 +1200,7 @@ def execute_behavior(
                 motor_controller,
                 calibrated_ticks_map,
                 noise_scale=noise_scale,
+                should_stop=should_stop,
             )
             behaviors_performed = True
             reset_after_sequence = True
