@@ -1,7 +1,7 @@
 {
  "_tables": {
   "clash_cells": 0,
-  "grid_digest": "81a266e0a62d0865",
+  "grid_digest": "180b254f4c0e2cc9",
   "n_vectors": 31,
   "states": [
    "ALONE",
@@ -39,13 +39,12 @@
   "baseline_arousal": 0.096,
   "baseline_valence": -0.015,
   "batch_counts": {
-   "angry": 20,
-   "content": 61,
-   "excited": 30,
+   "angry": 16,
+   "excited": 91,
    "neutral": 332,
-   "sad": 3
+   "sad": 7
   },
-  "batch_labels_digest": "d413a22441559481",
+  "batch_labels_digest": "446e56616c62d71d",
   "batch_labels_head": [
    "neutral",
    "neutral",
@@ -110,7 +109,7 @@
     13.724,
     "NEUTRAL",
     "NOTICING",
-    18
+    17
    ],
    [
     17.037,
@@ -122,19 +121,19 @@
     24.269,
     "NEUTRAL",
     "YES",
-    13
+    12
    ],
    [
     24.909,
     "YES",
     "NEUTRAL",
-    15
+    14
    ],
    [
     28.045,
     "NEUTRAL",
     "NOTICING",
-    18
+    17
    ]
   ],
   "head_angles": [
@@ -176,19 +175,18 @@
    ]
   ],
   "stream_counts": {
-   "angry": 20,
+   "angry": 17,
    "calibrating": 28,
-   "content": 59,
-   "excited": 30,
+   "excited": 89,
    "neutral": 306,
-   "sad": 3
+   "sad": 6
   },
   "stream_final_baseline": [
    0.098,
    -0.02
   ],
-  "stream_labels_digest": "aaa741552f9cd3dd",
-  "stream_vs_batch_agreement": 0.9282511210762332
+  "stream_labels_digest": "bc9cb89a69f64830",
+  "stream_vs_batch_agreement": 0.9304932735426009
  },
  "exploration/out/face_state_test_v2.csv": {
   "affect_from_blend": [
@@ -214,11 +212,11 @@
   "baseline_arousal": 0.1255,
   "baseline_valence": -0.043,
   "batch_counts": {
-   "angry": 9,
-   "excited": 60,
+   "angry": 46,
+   "excited": 23,
    "neutral": 307
   },
-  "batch_labels_digest": "3edc07212cc8d41a",
+  "batch_labels_digest": "04d39dd3e43a00f2",
   "batch_labels_head": [
    "neutral",
    "neutral",
@@ -283,7 +281,7 @@
     15.5,
     "NEUTRAL",
     "NOTICING",
-    18
+    17
    ]
   ],
   "head_angles": [
@@ -315,16 +313,16 @@
   "shake_digest": "f6f2312cfd2cfb62",
   "shake_spans": [],
   "stream_counts": {
-   "angry": 4,
+   "angry": 46,
    "calibrating": 35,
-   "excited": 65,
+   "excited": 23,
    "neutral": 272
   },
   "stream_final_baseline": [
    0.1255,
    -0.043
   ],
-  "stream_labels_digest": "572f48d6cd2df5fe",
-  "stream_vs_batch_agreement": 0.8936170212765957
+  "stream_labels_digest": "9183e63a5e3ffef5",
+  "stream_vs_batch_agreement": 0.9069148936170213
  }
 }

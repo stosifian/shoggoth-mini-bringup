@@ -29,6 +29,14 @@ A_THRESH = 0.0
 V_THRESH = 0.0
 DEADBAND = 0.20          # radius from baseline inside which the state is neutral
 DEADBAND_HYST = 0.65     # leave neutral at DEADBAND, return at 0.65 x that
+# Hysteresis on the two SIGN tests, which previously had none: outside the
+# deadband the quadrant was decided by bare comparisons, so a point parked on an
+# axis flipped between neighbouring quadrants on noise. Measured over a 96 s
+# session, 17 of 28 label changes crossed a quadrant boundary rather than the
+# deadband, twelve of them sad<->angry, with |d_arousal| under 0.02 on 28% of
+# frames outside the circle. Arousal is the axis this bites: it is built from
+# additions to a neutral face, so it rarely goes negative and hovers near zero.
+SIGN_MARGIN = 0.04
 BASELINE_WINDOW_S = 20.0  # running-median window, live path only
 BASELINE_MIN_S = 2.0     # below this a median is noise, so report 'calibrating'
 
@@ -86,6 +94,7 @@ class AffectConfig:
     v_thresh: float = V_THRESH
     deadband: float = DEADBAND
     deadband_hyst: float = DEADBAND_HYST
+    sign_margin: float = SIGN_MARGIN
     baseline_window_s: float = BASELINE_WINDOW_S
     baseline_min_s: float = BASELINE_MIN_S
     attend_yaw_deg: float = ATTEND_YAW_DEG

@@ -19,12 +19,28 @@ from collections import deque
 
 import numpy as np
 
+from dataclasses import dataclass
+
 from .config import DEFAULT, STATE_QUADRANT, AffectConfig
 
 
-def quadrant(da: float, dv: float, in_neutral: bool,
-             cfg: AffectConfig = DEFAULT) -> tuple[str, bool]:
-    """Baseline-corrected (arousal, valence) -> (state, still_in_neutral).
+@dataclass(frozen=True)
+class Latch:
+    """What the classifier must remember between frames, and nothing else.
+
+    Three bits: whether we were inside the deadband, and which side of each
+    axis we were last on. The sign bits exist so a boundary crossing is STICKY
+    rather than instantaneous -- without them a point sitting on an axis
+    relabels itself on noise, forever.
+    """
+    in_neutral: bool = True
+    hi_a: bool = False
+    pos_v: bool = False
+
+
+def quadrant(da: float, dv: float, latch: Latch = Latch(),
+             cfg: AffectConfig = DEFAULT) -> tuple[str, Latch]:
+    """Baseline-corrected (arousal, valence) -> (state, latch for next frame).
 
     Pure: no buffers, no timestamps, no arrays. Scalars in, answer out.
 
@@ -42,19 +58,31 @@ def quadrant(da: float, dv: float, in_neutral: bool,
     diagonally opposite quadrants: with equal weights, angry (+arousal,
     -valence) and content (-arousal, +valence) both score zero.
 
-    `neutral` is a radius test rather than a fifth quadrant -- close enough to
-    baseline that the quadrant is noise. It carries hysteresis, and the
-    direction matters: hold neutral until the radius clears `deadband`, then
-    hold the quadrant until it falls back below `deadband * hyst`. Inverting
-    those two makes the deadband easier to escape than to re-enter, which
-    produces MORE chatter, not less (measured: 44 flips against 8).
+    THREE boundaries, all hysteretic. The radius: hold neutral until it clears
+    `deadband`, then hold the quadrant until it falls back below
+    `deadband * hyst`. Inverting those makes the deadband easier to escape than
+    to re-enter, which produces MORE chatter (measured: 44 flips against 8).
+
+    And each SIGN, which previously had none -- outside the circle the quadrant
+    came from bare comparisons, so a point on an axis flipped on noise. To
+    become high-arousal you must clear `a_thresh + margin`; to stop being it you
+    must fall below `a_thresh - margin`. Coming out of neutral there is no prior
+    quadrant worth being sticky about, so the first decision uses the bare
+    thresholds.
     """
     if not (np.isfinite(da) and np.isfinite(dv)):
-        return "unknown", True
-    bar = cfg.deadband if in_neutral else cfg.deadband * cfg.deadband_hyst
+        return "unknown", Latch(in_neutral=True)
+    bar = cfg.deadband if latch.in_neutral else cfg.deadband * cfg.deadband_hyst
     if float(np.hypot(da, dv)) < bar:
-        return "neutral", True
-    return STATE_QUADRANT[(da > cfg.a_thresh, dv > cfg.v_thresh)], False
+        return "neutral", Latch(in_neutral=True, hi_a=latch.hi_a,
+                                pos_v=latch.pos_v)
+    m = cfg.sign_margin
+    if latch.in_neutral:
+        hi_a, pos_v = da > cfg.a_thresh, dv > cfg.v_thresh
+    else:
+        hi_a = da > cfg.a_thresh + m if not latch.hi_a else da > cfg.a_thresh - m
+        pos_v = dv > cfg.v_thresh + m if not latch.pos_v else dv > cfg.v_thresh - m
+    return STATE_QUADRANT[(hi_a, pos_v)], Latch(False, hi_a, pos_v)
 
 
 # =============================================================================
@@ -76,12 +104,12 @@ class AffectState:
         self.buf: deque[tuple[float, float, float]] = deque()
         self.state = "calibrating"
         self.baseline = (0.0, 0.0)
-        self._in_neutral = True
+        self._latch = Latch()
 
     def update(self, t: float, arousal: float, valence: float,
                have_face: bool) -> str:
         if not have_face:
-            self.state, self._in_neutral = "unknown", True
+            self.state, self._latch = "unknown", Latch()
             return self.state
 
         self.buf.append((t, arousal, valence))
@@ -96,8 +124,8 @@ class AffectState:
         arr = np.asarray(self.buf, float)
         a_base, v_base = float(np.median(arr[:, 1])), float(np.median(arr[:, 2]))
         self.baseline = (a_base, v_base)
-        self.state, self._in_neutral = quadrant(
-            arousal - a_base, valence - v_base, self._in_neutral, self.cfg)
+        self.state, self._latch = quadrant(
+            arousal - a_base, valence - v_base, self._latch, self.cfg)
         return self.state
 
 
@@ -133,10 +161,10 @@ def classify_affect(arousal, valence, a_thresh=None, v_thresh=None,
     da, dv = arousal - a_base, valence - v_base
 
     out = np.full(len(arousal), "neutral", dtype=object)
-    in_neutral = True
+    latch = Latch()
     for i in range(len(arousal)):
         if not have_face[i] or not (np.isfinite(da[i]) and np.isfinite(dv[i])):
-            out[i], in_neutral = "unknown", True
+            out[i], latch = "unknown", Latch()
             continue
-        out[i], in_neutral = quadrant(da[i], dv[i], in_neutral, cfg)
+        out[i], latch = quadrant(da[i], dv[i], latch, cfg)
     return out, (a_base, v_base)
