@@ -466,7 +466,7 @@ class SideSideConfig:
 SIDE_SIDE_CONFIG = SideSideConfig()
 # EXCITED: the same shape with more energy. Wider, quicker, and a gentler
 # multiplier so the beat keeps enough points to read at the shorter sweep.
-SIDE_SIDE_FAST_CONFIG = SideSideConfig(amplitude=0.18, sweep_s=1.8,
+SIDE_SIDE_FAST_CONFIG = SideSideConfig(amplitude=0.18, sweep_s=1.0,
                                        retreat_mult=2.0,
                                        overshoot_mult=2.0)
 GRAB_CONFIG = GrabMotionConfig()
