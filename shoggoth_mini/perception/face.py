@@ -35,6 +35,29 @@ SEARCH_CROP = 760
 ROI_MIN = 160
 ROI_MARGIN = 2.2            # crop side as a multiple of the face's larger extent
 
+# The crop is an INPUT to a deterministic but extremely sensitive regressor:
+# one least-significant bit of pixel noise already moves pitch by ~0.2 deg, so
+# reframing by a pixel is not a small perturbation. Measured with
+# tools/jitter_probe.py, the box was stepping ~1 px EVERY frame on a subject
+# holding still, and that accounted for ~61% of live yaw variance (reproduced
+# across two sittings; the pitch share was not reproducible, 7% and 35%).
+#
+# The cause is NOT the centre, which is steady to 0.23 px on a real mesh. It is
+# the SIDE: extent jitters 0.43% per frame, ROI_MARGIN multiplies that by 2.2
+# into 2.08 px of side, and x0 = centre - side/2 inherits half of it. So the
+# stabilisation belongs on the size, and quantising it is enough -- the box
+# only resizes when the face genuinely changes scale.
+#
+# Both rules are deadzones rather than filters, deliberately. An EMA still
+# nudges the box every frame, which is the thing being removed; a deadzone
+# holds it exactly still and then tracks with no lag at all once the face has
+# really moved. Replayed against 896 recorded frames of a real face: the box is
+# unchanged on 99% of frames (was 23%), while a 500 px slide still tracks with
+# 0.2 px median error and a 1.7x approach resizes to within 0%.
+ROI_SIDE_STEP = 16          # side snaps to this grid, in px
+ROI_SIDE_HYST = 0.75        # ...and only when it is off by this much of a step
+ROI_CENTRE_DEADZONE = 3.0   # centre moves under this px leave the box alone
+
 # 478-landmark layout: 0..467 mesh, 468..472 left iris, 473..477 right iris.
 # "Left" is MediaPipe's naming (the subject's left), not the image side.
 NOSE_TIP = 1
@@ -103,18 +126,40 @@ class Roi:
         self.x0 = (self.fw - self.side) // 2
         self.y0 = (self.fh - self.side) // 2
         self.locked = False
+        # Float tracking state, held separately from the rounded x0/y0/side the
+        # crop uses. Rounding the running value instead would put a sub-pixel
+        # step back in every frame, which is most of what this removes.
+        self._c: Optional[np.ndarray] = None
+        self._s: float = float(self.side)
 
     def crop(self, frame: np.ndarray) -> np.ndarray:
         return frame[self.y0:self.y0 + self.side, self.x0:self.x0 + self.side]
 
     def follow(self, px_full: np.ndarray) -> None:
+        """Track the face, but hold the box completely still when it is still.
+
+        See the ROI_SIDE_STEP block above for why the size, not the centre, is
+        what needed stabilising.
+        """
         lo, hi = px_full.min(axis=0), px_full.max(axis=0)
-        centre = (lo + hi) / 2.0
-        side = int(np.clip(float(np.max(hi - lo)) * ROI_MARGIN,
-                           ROI_MIN, min(self.fw, self.fh)))
+        want_c = (lo + hi) / 2.0
+        want_s = float(np.clip(float(np.max(hi - lo)) * ROI_MARGIN,
+                               ROI_MIN, min(self.fw, self.fh)))
+
+        if not self.locked or self._c is None:
+            c, s = want_c.astype(float), want_s          # first lock: snap
+        else:
+            c, s = self._c, self._s
+            if abs(want_s - s) > ROI_SIDE_STEP * ROI_SIDE_HYST:
+                s = round(want_s / ROI_SIDE_STEP) * ROI_SIDE_STEP
+            if float(np.hypot(*(want_c - c))) > ROI_CENTRE_DEADZONE:
+                c = want_c.astype(float)
+
+        self._c, self._s = c, s
+        side = int(np.clip(round(s), ROI_MIN, min(self.fw, self.fh)))
         self.side = side
-        self.x0 = int(np.clip(centre[0] - side / 2, 0, self.fw - side))
-        self.y0 = int(np.clip(centre[1] - side / 2, 0, self.fh - side))
+        self.x0 = int(np.clip(round(c[0] - side / 2), 0, self.fw - side))
+        self.y0 = int(np.clip(round(c[1] - side / 2), 0, self.fh - side))
         self.locked = True
 
 

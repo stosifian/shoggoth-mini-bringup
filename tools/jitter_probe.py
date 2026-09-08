@@ -272,9 +272,11 @@ def main() -> int:
     live = c["yaw_sd"]
     print(f"\nLive yaw sd {live:.3f} deg vs attention threshold "
           f"{ATTEND_YAW_DEG:.0f} deg (pitch {ATTEND_PITCH_DEG:.0f}).")
-    print(f"A head parked within {2*live:.2f} deg of a threshold will chatter, "
-          f"because\nattending() is an instantaneous comparison with no "
-          f"hysteresis.")
+    from shoggoth_mini.affect.config import ATTEND_MARGIN_DEG
+    print(f"attending() has a {ATTEND_MARGIN_DEG:.0f} deg Schmitt margin, i.e. "
+          f"{ATTEND_MARGIN_DEG/max(live,1e-9):.1f} sigma of this\nnoise, so "
+          f"boundary chatter should be suppressed. Re-run tools/plot_face_csv "
+          f"on a\nsession to confirm the flip count.")
     return 0
 
 
