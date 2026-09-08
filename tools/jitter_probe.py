@@ -88,6 +88,9 @@ def main() -> int:
     ap.add_argument("--crop", type=int, default=SEARCH_CROP)
     ap.add_argument("--save-frame", type=Path, default=None,
                     help="write the frozen frame, so the test can be repeated")
+    ap.add_argument("--save-landmarks", type=Path, default=None,
+                    help="write the live landmark sequence (.npz) so ROI "
+                         "changes can be replayed against REAL faces offline")
     args = ap.parse_args()
 
     yaml = PKG / "configs" / "default_perception.yaml"
@@ -180,6 +183,18 @@ def main() -> int:
             boxes.append((roi.x0, roi.y0, roi.side))
     cap.release()
     c = stats("live frames", ys, ps, pxs)
+    if args.save_landmarks and pxs:
+        # Real landmark sequences, so Roi.follow() can be changed and replayed
+        # offline without a camera. Synthetic landmarks are NOT a substitute:
+        # a Gaussian blob has no dense silhouette, so any percentile or
+        # trimming rule behaves completely differently on it than on a face,
+        # and tuning against one measures the fixture.
+        args.save_landmarks.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(args.save_landmarks, px=np.stack(pxs),
+                            yaw=np.array(ys), pitch=np.array(ps),
+                            boxes=np.array(boxes), fw=frozen.shape[1],
+                            fh=frozen.shape[0], crop=args.crop)
+        print(f"   saved {len(pxs)} real landmark frames -> {args.save_landmarks}")
 
     # ---- how far does the box ACTUALLY move? -------------------------------
     bx = np.array(boxes, float)
