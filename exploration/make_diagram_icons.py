@@ -21,8 +21,22 @@ import numpy as np
 
 OUT = Path(__file__).resolve().parent / "out" / "icons"
 INK = "#1a1a1a"
-ACCENT = "#c2185b"          # matches the pink perception boxes
 LW = 2.6
+
+# MONOCHROME BY DEFAULT, and the reason is the diagram's own colour scheme:
+# hue there encodes DATA TYPE (teal sensor, blue binary, orange discrete,
+# magenta continuous). These glyphs describe OPERATIONS -- hysteresis,
+# subtraction, quantisation -- which are not a data type, so giving them hue
+# would assert a category that does not exist. Emphasis is carried by line
+# weight and dash instead, which is free of that encoding.
+#
+# The circumplex is the one that mattered: four coloured quadrants implied four
+# data types, and two of its hues collided with blue and orange used elsewhere.
+# Grey tints keep the quadrants distinguishable without claiming anything.
+ACCENT = "#1a1a1a"          # set by --colour to the pink perception hue
+QUADS = ("#e8e8e8", "#d6d6d6", "#c4c4c4", "#eeeeee")
+COLOUR_ACCENT = "#c2185b"
+COLOUR_QUADS = ("#f2b544", "#e2574c", "#5b8def", "#57b894")
 
 
 # Raster resolution for the PNGs. The SVGs are resolution-free and are what
@@ -83,7 +97,7 @@ def deadband():
     ax.axhline(0, color="#bbb", lw=1.1)
     ax.axvline(0, color="#bbb", lw=1.1)
     ax.plot(x, y, color=INK, lw=LW, solid_capstyle="round")
-    ax.plot([-d, d], [0, 0], color=ACCENT, lw=LW + 1.4, solid_capstyle="round")
+    ax.plot([-d, d], [0, 0], color=ACCENT, lw=LW + 2.2, solid_capstyle="round")
     ax.set_xlim(-1.1, 1.1); ax.set_ylim(-1.1, 1.1)
     save(fig, "deadband")
 
@@ -95,7 +109,7 @@ def baseline():
     t = np.linspace(0, 1, 260)
     drift = 0.30 * np.sin(2.0 * t) + 0.16 * t
     sig = drift + 0.30 * np.sin(15 * t) + 0.05 * rng.normal(size=t.size)
-    ax.fill_between(t, drift, sig, color=ACCENT, alpha=0.22, lw=0)
+    ax.fill_between(t, drift, sig, color=ACCENT, alpha=0.16, lw=0)
     ax.plot(t, sig, color=INK, lw=LW * 0.82, solid_capstyle="round")
     ax.plot(t, drift, color=ACCENT, lw=LW, ls=(0, (4, 2.6)))
     ax.set_xlim(-0.02, 1.02); ax.set_ylim(-0.55, 0.95)
@@ -109,11 +123,11 @@ def circumplex():
     quadrants of them, and the middle is neutral rather than a fifth state.
     """
     fig, ax = canvas(size=2.2)
-    for q, c in ((1, "#f2b544"), (2, "#e2574c"), (3, "#5b8def"), (4, "#57b894")):
+    for q, c in enumerate(QUADS, start=1):
         a0 = np.radians([0, 90, 180, 270][q - 1])
         w = np.linspace(a0, a0 + np.pi / 2, 40)
         ax.fill(np.concatenate([[0], np.cos(w)]),
-                np.concatenate([[0], np.sin(w)]), color=c, alpha=0.30, lw=0)
+                np.concatenate([[0], np.sin(w)]), color=c, alpha=1.0, lw=0)
     ax.add_patch(plt.Circle((0, 0), 1.0, fill=False, color=INK, lw=LW))
     ax.plot([-1, 1], [0, 0], color=INK, lw=1.5)
     ax.plot([0, 0], [-1, 1], color=INK, lw=1.5)
@@ -194,8 +208,13 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dpi", type=int, default=DPI, help="icon raster dpi")
     ap.add_argument("--sheet-dpi", type=int, default=300)
+    ap.add_argument("--colour", action="store_true",
+                    help="use the pink accent and coloured quadrants instead "
+                         "of monochrome (see the palette note above)")
     a = ap.parse_args()
     DPI = a.dpi
+    if a.colour:
+        ACCENT, QUADS = COLOUR_ACCENT, COLOUR_QUADS
     print(f"writing icons -> {OUT}  ({DPI} dpi)")
     schmitt(); deadband(); baseline(); circumplex(); quantised()
     sheet(a.sheet_dpi)
