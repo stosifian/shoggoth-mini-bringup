@@ -62,11 +62,19 @@ def stats(name: str, yaw: list, pitch: list, px: list) -> dict:
         stack = np.stack(px)                      # (n, 478, 2)
         # per-landmark scatter, then the typical one across the mesh
         d["px_sd"] = float(np.median(stack.std(axis=0).mean(axis=1)))
+        d["px_max"] = float(stack.std(axis=0).max())
+        # A zero is only believable if the samples are genuinely separate
+        # objects. Appending one aliased array 40 times would also report 0.
+        d["distinct"] = len({id(a) for a in px})
     else:
-        d["px_sd"] = float("nan")
-    print(f"  {name:34} n={d['n']:3}  yaw sd {d['yaw_sd']:6.3f} deg "
-          f"(p-p {d['yaw_pp']:5.2f})  pitch sd {d['pitch_sd']:6.3f}  "
-          f"landmark sd {d['px_sd']:5.2f} px")
+        d["px_sd"] = d["px_max"] = float("nan")
+        d["distinct"] = 0
+    # Full precision, not %.3f. A rounded 0.000 hides 4e-4, and the whole
+    # question about test A is whether the zero is exact or merely small.
+    print(f"  {name:34} n={d['n']:3}  yaw sd {d['yaw_sd']:.6g} deg "
+          f"(p-p {d['yaw_pp']:.4g})  pitch sd {d['pitch_sd']:.6g}  "
+          f"landmark sd {d['px_sd']:.4g} px (worst {d['px_max']:.4g}, "
+          f"{d['distinct']}/{d['n']} distinct arrays)")
     return d
 
 
@@ -125,6 +133,33 @@ def main() -> int:
             ys.append(o.yaw); ps.append(o.pitch); pxs.append(o.px)
     a = stats("same frame, same crop", ys, ps, pxs)
 
+    # ---- A': positive control ---------------------------------------------
+    # A zero from test A is worthless on its own: a harness that always returns
+    # the same number would report exactly this. So perturb the pixels by a
+    # single least-significant bit -- far below anything visible, and far below
+    # real sensor noise -- and require the output to MOVE. If it does not, the
+    # zero above is measuring the harness rather than the model.
+    print("\nA' CONTROL, same crop but +/-1 LSB of pixel noise (must be > 0)")
+    ys, ps, pxs = [], [], []
+    rng = np.random.default_rng(1)
+    for _ in range(args.repeats):
+        noisy = np.clip(frozen.astype(np.int16)
+                        + rng.integers(-1, 2, frozen.shape, dtype=np.int16),
+                        0, 255).astype(np.uint8)
+        r = Roi(frozen.shape[1], frozen.shape[0], args.crop)
+        r.x0, r.y0, r.side, r.locked = roi0.x0, roi0.y0, roi0.side, True
+        o = detect_face(noisy, r)
+        if o:
+            ys.append(o.yaw); ps.append(o.pitch); pxs.append(o.px)
+    ctrl = stats("1 LSB of noise", ys, ps, pxs)
+    if ctrl["px_sd"] <= 0.0 and ctrl["yaw_sd"] <= 0.0:
+        print("  !! CONTROL FAILED: one bit of pixel noise changed nothing.")
+        print("     Test A's zero is NOT evidence about the model -- something")
+        print("     in this harness is returning a constant. Do not trust A.")
+    else:
+        print(f"  control moved (landmark sd {ctrl['px_sd']:.4g} px), so the "
+              f"harness CAN see a\n  difference, and test A's zero is real.")
+
     # ---- B: identical pixels, crop jogged the way follow() jogs it ---------
     print("\nB  ROI CROP, same pixels but the box moved +/-2 px and +/-1% scale")
     ys, ps, pxs = [], [], []
@@ -160,8 +195,14 @@ def main() -> int:
     # ---- what it means ----------------------------------------------------
     print("\n" + "=" * 72)
     if a["yaw_sd"] < 1e-9 and a["pitch_sd"] < 1e-9:
-        print("A = 0: the model is DETERMINISTIC. Every wobble is the input "
-              "changing,\n       so smoothing the input is a real fix.")
+        if ctrl["px_sd"] > 0.0 or ctrl["yaw_sd"] > 0.0:
+            print("A = 0 and the control moved: the model is DETERMINISTIC. "
+                  "Every wobble is\n       the input changing, so smoothing "
+                  "the input is a real fix.")
+        else:
+            print("A = 0 but the CONTROL ALSO = 0. This says nothing about the "
+                  "model;\n       the harness is broken. Fix it before reading "
+                  "B or C.")
     else:
         print(f"A > 0: the model itself varies on identical pixels "
               f"({a['yaw_sd']:.3f} deg).\n       Only temporal filtering helps.")
