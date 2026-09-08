@@ -160,25 +160,13 @@ def main() -> int:
         print(f"  control moved (landmark sd {ctrl['px_sd']:.4g} px), so the "
               f"harness CAN see a\n  difference, and test A's zero is real.")
 
-    # ---- B: identical pixels, crop jogged the way follow() jogs it ---------
-    print("\nB  ROI CROP, same pixels but the box moved +/-2 px and +/-1% scale")
-    ys, ps, pxs = [], [], []
-    rng = np.random.default_rng(0)
-    for _ in range(args.repeats):
-        r = Roi(frozen.shape[1], frozen.shape[0], args.crop)
-        side = int(roi0.side * (1.0 + rng.uniform(-0.01, 0.01)))
-        r.side = int(np.clip(side, 1, min(r.fw, r.fh)))
-        r.x0 = int(np.clip(roi0.x0 + rng.integers(-2, 3), 0, r.fw - r.side))
-        r.y0 = int(np.clip(roi0.y0 + rng.integers(-2, 3), 0, r.fh - r.side))
-        r.locked = True
-        o = detect_face(frozen, r)
-        if o:
-            ys.append(o.yaw); ps.append(o.pitch); pxs.append(o.px)
-    b = stats("same frame, crop jogged", ys, ps, pxs)
-
     # ---- C: live, everything moving ---------------------------------------
+    # Runs BEFORE B, because B needs to know how far the box really moves.
+    # detect_face calls roi.follow() in place, so reading the box back after
+    # each detection is the actual production trajectory -- no instrumentation
+    # inside face.py, and nothing that could alter what it measures.
     print(f"\nC  LIVE, {args.live_seconds:.0f}s of real frames (still keeping still)")
-    ys, ps, pxs = [], [], []
+    ys, ps, pxs, boxes = [], [], [], []
     roi = Roi(frozen.shape[1], frozen.shape[0], args.crop)
     t0 = time.time()
     while time.time() - t0 < args.live_seconds:
@@ -189,8 +177,46 @@ def main() -> int:
         o = detect_face(left, roi)
         if o:
             ys.append(o.yaw); ps.append(o.pitch); pxs.append(o.px)
+            boxes.append((roi.x0, roi.y0, roi.side))
     cap.release()
     c = stats("live frames", ys, ps, pxs)
+
+    # ---- how far does the box ACTUALLY move? -------------------------------
+    bx = np.array(boxes, float)
+    if len(bx) < 3:
+        raise SystemExit("too few live detections to measure ROI motion")
+    d = np.diff(bx, axis=0)                       # per-frame dx, dy, dside
+    dscale = d[:, 2] / bx[:-1, 2]
+    print(f"\n   measured ROI motion over {len(bx)} frames:")
+    print(f"     dx    median {np.median(np.abs(d[:,0])):5.1f} px  "
+          f"p95 {np.percentile(np.abs(d[:,0]),95):5.1f}  max {np.abs(d[:,0]).max():5.0f}")
+    print(f"     dy    median {np.median(np.abs(d[:,1])):5.1f} px  "
+          f"p95 {np.percentile(np.abs(d[:,1]),95):5.1f}  max {np.abs(d[:,1]).max():5.0f}")
+    print(f"     dside median {np.median(np.abs(dscale))*100:5.2f} %   "
+          f"p95 {np.percentile(np.abs(dscale),95)*100:5.2f}   "
+          f"max {np.abs(dscale).max()*100:5.1f}")
+
+    # ---- B: identical pixels, crop jogged by the MEASURED distribution -----
+    # The first version of this test assumed +/-2 px and +/-1 %. That was a
+    # guess, and two runs disagreed by 9x on how much of the live pitch
+    # variance it explained -- because the effect scales with crop size, which
+    # changes every sitting. Resampling the real per-frame steps removes the
+    # assumption: whatever the box did during THIS live pass is what gets
+    # replayed against a frozen frame.
+    print("\nB  ROI CROP, same pixels, box jogged by the MEASURED steps above")
+    ys, ps, pxs = [], [], []
+    rng = np.random.default_rng(0)
+    for _ in range(args.repeats):
+        dx, dy, ds = d[rng.integers(0, len(d))]
+        r = Roi(frozen.shape[1], frozen.shape[0], args.crop)
+        r.side = int(np.clip(roi0.side + ds, 16, min(r.fw, r.fh)))
+        r.x0 = int(np.clip(roi0.x0 + dx, 0, r.fw - r.side))
+        r.y0 = int(np.clip(roi0.y0 + dy, 0, r.fh - r.side))
+        r.locked = True
+        o = detect_face(frozen, r)
+        if o:
+            ys.append(o.yaw); ps.append(o.pitch); pxs.append(o.px)
+    b = stats("frozen frame, real box steps", ys, ps, pxs)
 
     # ---- what it means ----------------------------------------------------
     print("\n" + "=" * 72)
@@ -206,12 +232,28 @@ def main() -> int:
     else:
         print(f"A > 0: the model itself varies on identical pixels "
               f"({a['yaw_sd']:.3f} deg).\n       Only temporal filtering helps.")
-    if b["yaw_sd"] > max(a["yaw_sd"], 1e-9) * 2:
-        print(f"B >> A: a 2 px crop shift moves yaw by {b['yaw_sd']:.3f} deg sd. "
-              f"Roi.follow()\n        rounds to int every frame, so this fires "
-              f"constantly. OURS to fix.")
-    else:
-        print("B ~ A: the crop is not a significant contributor.")
+    # Variance is what adds, so apportion there and report as a share of live.
+    # A share near or above 100% does NOT mean the crop explains everything --
+    # it means the frozen-frame replay is not a clean subset of the live
+    # condition, and the split should not be quoted.
+    print("\n  share of LIVE variance, by axis:")
+    for ax in ("yaw", "pitch"):
+        cv = c[f"{ax}_sd"] ** 2
+        if cv <= 0:
+            continue
+        crop = b[f"{ax}_sd"] ** 2 / cv
+        lsb = ctrl[f"{ax}_sd"] ** 2 / cv
+        rest = 1.0 - crop
+        flag = "  <-- see note" if crop > 0.85 else ""
+        print(f"    {ax:5}  crop {crop*100:5.1f}%   sensor+motion "
+              f"{max(rest,0)*100:5.1f}%   (1 LSB alone would be "
+              f"{lsb*100:4.1f}%){flag}")
+    if max(b["yaw_sd"] ** 2 / max(c["yaw_sd"] ** 2, 1e-12),
+           b["pitch_sd"] ** 2 / max(c["pitch_sd"] ** 2, 1e-12)) > 0.85:
+        print("\n  NOTE: a crop share near 100% means B is not cleanly nested "
+              "inside C --\n  the frozen frame differs from the live scene in "
+              "lighting or pose. Repeat\n  the run before quoting the split; "
+              "these shares have varied 9x between\n  sittings.")
     live = c["yaw_sd"]
     print(f"\nLive yaw sd {live:.3f} deg vs attention threshold "
           f"{ATTEND_YAW_DEG:.0f} deg (pitch {ATTEND_PITCH_DEG:.0f}).")
