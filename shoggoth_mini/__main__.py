@@ -86,14 +86,27 @@ def orchestrate_mirror(
     crop: int = typer.Option(0, "--crop", help="face search-crop side, px"),
     flip_yaw: bool = typer.Option(False, "--flip-yaw"),
     flip_pitch: bool = typer.Option(False, "--flip-pitch"),
+    view: bool = typer.Option(False, "--view/--no-view",
+                              help="live window: landmarks, channels, "
+                                   "and the machine's inputs"),
+    view_eyes: str = typer.Option("left", "--view-eyes",
+                                  help="left | right | both"),
+    view_width: int = typer.Option(1600, "--view-width",
+                                   help="downscale the window to this width"),
+    panel_scale: float = typer.Option(2.0, "--panel-scale",
+                                      help="readout text size"),
 ) -> None:
     """Run the mirror state machine on the robot (motors off unless --motors)."""
     from pathlib import Path as _P
     from .orchestrator.mirror import run_mirror
 
+    if view_eyes not in ("left", "right", "both"):
+        raise typer.BadParameter("--view-eyes must be left, right or both")
     run_mirror(_P(tables), source=source, use_motors=motors,
                csv_path=_P(csv_path) if csv_path else None, config=config,
-               crop=crop, flip_yaw=flip_yaw, flip_pitch=flip_pitch)
+               crop=crop, flip_yaw=flip_yaw, flip_pitch=flip_pitch,
+               view=view, view_eyes=view_eyes, view_width=view_width,
+               panel_scale=panel_scale)
 
 
 @app.command()

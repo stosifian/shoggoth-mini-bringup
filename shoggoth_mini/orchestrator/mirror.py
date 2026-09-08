@@ -431,14 +431,22 @@ CSV_COLUMNS = ["t", "det_l", "det_r", "x", "y", "z", "dist", "ipd",
 
 
 # =============================================================================
+WIN = "shoggoth mirror"
+
+
 def run_mirror(tables: Path, source="0", use_motors: bool = False,
                csv_path: Optional[Path] = None, config: Optional[str] = None,
                crop: int = 0, flip_yaw: bool = False,
-               flip_pitch: bool = False) -> None:
+               flip_pitch: bool = False, view: bool = False,
+               view_eyes: str = "left", view_width: int = 1600,
+               panel_scale: float = 2.0) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     from ..configs import get_perception_config
     from ..perception.face import SEARCH_CROP
+    from ..perception.overlay import (draw_face, draw_mirror_strip,
+                                      draw_panel, draw_stop_button,
+                                      min_panel_width)
 
     pkg = Path(__file__).resolve().parents[1]
     yaml = pkg / "configs" / "default_perception.yaml"
@@ -519,7 +527,27 @@ def run_mirror(tables: Path, source="0", use_motors: bool = False,
 
     print(f"  gesture lag {gestures.lag_s:.2f}s (centred window, evaluated on "
           f"the newest fully-windowed sample)")
+
+    # The viewer runs on THIS thread. cv2's window pump is main-thread-only on
+    # macOS, and the perception loop is already the main thread -- only motors
+    # are on a worker -- so the window is safe here and nowhere else. Drawing
+    # costs a copy plus 468 circles per eye at full capture width, which is why
+    # one eye is the default: two views of the same face tell a viewer nothing
+    # extra and double the bill.
+    ui = {"stop": False, "btn": (0, 0, 0, 0)}
+    min_w = min_panel_width(panel_scale)
+    if view:
+        def on_mouse(event, x, y, flags, _):
+            if event == cv2.EVENT_LBUTTONDOWN:
+                bx, by, bw, bh = ui["btn"]
+                if bx <= x <= bx + bw and by <= y <= by + bh:
+                    ui["stop"] = True
+        cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback(WIN, on_mouse)
+        print(f"  view: ON ({view_eyes} eye, max {view_width}px, "
+              f"min {min_w}px) -- q or STOP to quit cleanly")
     print("  ctrl-C to stop\n")
+    vfps, vframes, vlast = 0.0, 0, time.time()
 
     t0 = time.time()
     last_state, last_print = None, 0.0
@@ -606,6 +634,53 @@ def run_mirror(tables: Path, source="0", use_motors: bool = False,
                     att, emo, f"{det_ms:.1f}", state,
                     fired.row if fired else ""])
 
+            if view:
+                vframes += 1
+                if time.time() - vlast >= 0.5:
+                    vfps = vframes / (time.time() - vlast)
+                    vframes, vlast = 0, time.time()
+                if view_eyes == "both":
+                    canvas = np.hstack([draw_face(left, fl, "LEFT", roi_l),
+                                        draw_face(right, fr, "RIGHT", roi_r)])
+                elif view_eyes == "right":
+                    canvas = draw_face(right, fr, "RIGHT", roi_r)
+                else:
+                    canvas = draw_face(left, fl, "LEFT", roi_l)
+                # Upscale a narrow capture BEFORE composing. putText clips
+                # without complaint, so a composition narrower than the panels
+                # need loses the input chips and the playing primitive while
+                # still looking like a working display.
+                if canvas.shape[1] < min_w:
+                    sc = min_w / canvas.shape[1]
+                    canvas = cv2.resize(canvas, None, fx=sc, fy=sc,
+                                        interpolation=cv2.INTER_LINEAR)
+                # The strip is fed the SAME vector and row the machine just
+                # stepped on, so the screen cannot claim a transition the
+                # machine did not make.
+                cur = worker.current
+                canvas = np.vstack([
+                    canvas,
+                    draw_panel(canvas.shape[1], ch, obs, ipd, vfps, det_ms,
+                               affect, scale=panel_scale),
+                    draw_mirror_strip(canvas.shape[1], state,
+                                      cur.primitive if cur else None, v,
+                                      fired.row if fired else None, emo,
+                                      scale=panel_scale)])
+                if view_width > 0 and canvas.shape[1] > view_width:
+                    sc = view_width / canvas.shape[1]
+                    canvas = cv2.resize(canvas, None, fx=sc, fy=sc,
+                                        interpolation=cv2.INTER_AREA)
+                # Drawn AFTER the downscale so the hit box is in the same
+                # coordinates the mouse callback reports clicks in.
+                ui["btn"] = draw_stop_button(canvas)
+                cv2.imshow(WIN, canvas)
+                k = cv2.waitKey(1) & 0xFF
+                if k == ord("q") or ui["stop"]:
+                    # break, never sys.exit: the finally block is what parks
+                    # the motors and disconnects the bus.
+                    print(f"\n  stopping ({'STOP clicked' if ui['stop'] else 'q'})")
+                    break
+
             if file_fps:
                 slack = 1.0 / file_fps - (time.time() - tick)
                 if slack > 0:
@@ -622,6 +697,8 @@ def run_mirror(tables: Path, source="0", use_motors: bool = False,
         worker.stop()
         pool.shutdown()
         cap.release()
+        if view:
+            cv2.destroyAllWindows()
         if fh:
             fh.close()
         if mc is not None:
