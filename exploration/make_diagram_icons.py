@@ -25,8 +25,15 @@ ACCENT = "#c2185b"          # matches the pink perception boxes
 LW = 2.6
 
 
+# Raster resolution for the PNGs. The SVGs are resolution-free and are what
+# should actually go in the diagram; the PNGs exist for tools that will not
+# take vector input, and those want plenty of headroom because a glyph placed
+# at 48 px on screen is 4x that in a retina export and more again in print.
+DPI = 400
+
+
 def canvas(size=2.0):
-    fig, ax = plt.subplots(figsize=(size, size), dpi=160)
+    fig, ax = plt.subplots(figsize=(size, size), dpi=DPI)
     ax.set_axis_off()
     ax.set_aspect("equal")
     fig.patch.set_alpha(0.0)
@@ -39,7 +46,8 @@ def save(fig, name):
         fig.savefig(OUT / f"{name}.{ext}", transparent=True,
                     bbox_inches="tight", pad_inches=0.04)
     plt.close(fig)
-    print(f"  {name}.png / .svg")
+    px = int(fig.get_size_inches()[0] * DPI)
+    print(f"  {name}.png (~{px}px) / .svg")
 
 
 def schmitt():
@@ -126,6 +134,68 @@ def quantised():
     save(fig, "quantised")
 
 
+ICONS = [
+    ("schmitt", "Schmitt trigger", "enter and leave at different thresholds"),
+    ("deadband", "deadband", "output ignores small input"),
+    ("baseline", "baseline subtraction", "signal minus its slow median"),
+    ("circumplex", "circumplex + neutral", "quadrants, with a dead disc"),
+    ("quantised", "quantised", "snaps to a grid, ignores wobble"),
+]
+
+
+def sheet(dpi: int = 300):
+    """Contact sheet: every glyph at full size and at the sizes it must survive.
+
+    Rendered from the saved PNGs rather than redrawing, so what is being judged
+    is the actual artefact that goes in the diagram. The small columns are the
+    point of the sheet -- a glyph can look immaculate at full size and turn to
+    mush at 40 px, which is how the Schmitt arrows were caught rendering as
+    dots.
+    """
+    import matplotlib.image as mpimg
+
+    sizes = [1.0, 0.42, 0.26]           # full, ~64 px, ~40 px in a diagram
+    labels = ["full size", "at 64 px", "at 40 px"]
+    n = len(ICONS)
+    fig = plt.figure(figsize=(2.35 * n, 5.6), dpi=dpi)
+    fig.patch.set_facecolor("white")
+
+    for j, (name, title, blurb) in enumerate(ICONS):
+        img = mpimg.imread(OUT / f"{name}.png")
+        for i, (s, lab) in enumerate(zip(sizes, labels)):
+            # place by hand so the small versions are genuinely smaller rather
+            # than a full-size image squeezed into a smaller axes box
+            w = 0.155 * s
+            x = (j + 0.5) / n - w / 2
+            y = 0.62 - i * 0.245 - w / 2
+            ax = fig.add_axes([x, y, w, w * (2.35 * n) / 5.6])
+            ax.imshow(img)
+            ax.set_axis_off()
+            if j == 0:
+                fig.text(0.012, y + w * 0.16, lab, fontsize=8.5,
+                         color="#666", va="center")
+        fig.text((j + 0.5) / n, 0.90, title, ha="center", fontsize=11.5,
+                 color="#111")
+        fig.text((j + 0.5) / n, 0.865, blurb, ha="center", fontsize=8.5,
+                 color="#777")
+
+    fig.text(0.5, 0.02, "Line art, transparent, PNG + SVG in "
+             "exploration/out/icons/ — use the SVG in the diagram",
+             ha="center", fontsize=9, color="#888")
+    out = OUT.parent / "icon_sheet.png"
+    fig.savefig(out, dpi=dpi, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+    print(f"\n  sheet -> {out}  ({dpi} dpi)")
+
+
 if __name__ == "__main__":
-    print("writing icons ->", OUT)
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--dpi", type=int, default=DPI, help="icon raster dpi")
+    ap.add_argument("--sheet-dpi", type=int, default=300)
+    a = ap.parse_args()
+    DPI = a.dpi
+    print(f"writing icons -> {OUT}  ({DPI} dpi)")
     schmitt(); deadband(); baseline(); circumplex(); quantised()
+    sheet(a.sheet_dpi)
