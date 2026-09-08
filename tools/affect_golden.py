@@ -82,9 +82,17 @@ def capture():
         rec["rolling_sigma_pitch_digest"] = digest(_rolling_sigma(t, pitch))
 
         # --- attention ------------------------------------------------------
-        att = [bool(abs(yaw[i]) < fp.ATTEND_YAW_DEG
-                    and abs(pitch[i]) < fp.ATTEND_PITCH_DEG)
-               if face[i] else False for i in range(len(t))]
+        # Call the library rather than restating its rule. This used to inline
+        # `abs(yaw) < ATTEND_YAW_DEG and abs(pitch) < ATTEND_PITCH_DEG`, which
+        # meant the golden could not see a change to attending() at all -- it
+        # reported IDENTICAL across the addition of a Schmitt trigger, because
+        # it was pinning its own copy of the logic instead of the function's.
+        # A golden that restates what it guards guards nothing.
+        from shoggoth_mini.affect import attending as _attending
+        att, _l = [], False
+        for i in range(len(t)):
+            _l = bool(face[i]) and _attending(yaw[i], pitch[i], _l)
+            att.append(_l)
         rec["attending_digest"] = digest(np.array(att, float))
         rec["attending_frames"] = int(sum(att))
 

@@ -49,15 +49,30 @@ def affect_from_blend(blend: dict, cfg: AffectConfig = DEFAULT) -> tuple[float, 
     return out[0], out[1]
 
 
-def attending(yaw: float, pitch: float, cfg: AffectConfig = DEFAULT) -> bool:
+def attending(yaw: float, pitch: float, latched: bool = False,
+              cfg: AffectConfig = DEFAULT) -> bool:
     """Is the head pointed close enough to head-on to count as looking at us?
 
     Head pose, NOT gaze: someone can look at the robot out of the corner of
     their eye and register as not attending. The iris landmarks exist to fix
     that later; nothing uses them yet.
 
-    Instantaneous, so it chatters at the boundary -- one noisy frame crossing
-    the threshold resets a dwell timer that has been building for ten seconds.
-    Callers that care want hysteresis or an N-frame requirement on top.
+    A SCHMITT TRIGGER, not a bare comparison. `latched` is the previous answer:
+    entering costs margin, leaving refunds it, so the thresholds are 23/18 deg
+    on the way in and 27/22 on the way out.
+
+    The bare comparison this replaces chattered, and the cost was measured
+    rather than assumed. In a 155 s session the attention bit flipped 64 times,
+    and 57 of 61 flips happened within ONE degree of a threshold (median 0.28
+    deg) -- a head parked near the boundary being toggled by 0.4-0.9 deg of
+    landmark noise. Every flip resets a dwell timer that may have been building
+    for ten seconds.
+
+    Note that no amount of input smoothing fixes this. Filtering makes a head
+    parked exactly on the threshold chatter more slowly, not less; only a gap
+    between the entry and exit tests removes it. That is why this is here and
+    not in Channels' EMA.
     """
-    return abs(yaw) < cfg.attend_yaw_deg and abs(pitch) < cfg.attend_pitch_deg
+    m = cfg.attend_margin_deg if latched else -cfg.attend_margin_deg
+    return (abs(yaw) < cfg.attend_yaw_deg + m
+            and abs(pitch) < cfg.attend_pitch_deg + m)

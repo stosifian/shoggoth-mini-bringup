@@ -19,6 +19,11 @@ from dataclasses import dataclass, field
 # against anyone actually looking at the robot.
 ATTEND_YAW_DEG = 25.0
 ATTEND_PITCH_DEG = 20.0
+# Schmitt-trigger gap on the attention test. Sized from measured landmark
+# noise: live yaw sd 0.4-0.7 deg, pitch 0.7-0.9 deg (tools/jitter_probe.py),
+# so 2 deg is roughly 3 sigma on the noisier axis and swallows the boundary
+# chatter without making attention noticeably harder to earn.
+ATTEND_MARGIN_DEG = 2.0
 
 # --- affect classification ---------------------------------------------------
 # Splits are RELATIVE to a baseline, not absolute. A resting face is not (0, 0):
@@ -99,6 +104,7 @@ class AffectConfig:
     baseline_min_s: float = BASELINE_MIN_S
     attend_yaw_deg: float = ATTEND_YAW_DEG
     attend_pitch_deg: float = ATTEND_PITCH_DEG
+    attend_margin_deg: float = ATTEND_MARGIN_DEG
     blendshape_weights: dict = field(default_factory=lambda: BLENDSHAPE_WEIGHTS)
     blendshape_gain: float = BLENDSHAPE_GAIN
 

@@ -601,7 +601,7 @@ def run_mirror(tables: Path, source="0", use_motors: bool = False,
                 now, obs.yaw if obs else np.nan, obs.pitch if obs else np.nan)
 
             face = int(obs is not None)
-            att = int(face and attending(obs.yaw, obs.pitch))
+            att = int(face and ch.attending)   # latched, see features.attending
             # No face means NO emotion asserted -- all five at zero, not
             # Neutral. 'calibrating' and 'unknown' are the same: an absence of
             # evidence rather than evidence of calm.

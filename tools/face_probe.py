@@ -275,7 +275,7 @@ def main() -> None:
                                            if obs else (np.nan,) * 3)),
                     f"{ch.arousal:.3f}", f"{ch.valence:.3f}", f"{ch.change:.3f}",
                     f"{ch.dwell:.2f}", f"{ch.absent:.2f}", f"{ch.approach:.3f}",
-                    int(obs is not None and Channels.attending(obs)),
+                    int(obs is not None and ch.attending),
                     affect.state, f"{det_ms:.1f}"])
 
             frames += 1

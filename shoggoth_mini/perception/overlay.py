@@ -138,7 +138,7 @@ def draw_panel(width: int, ch: Channels, obs: Optional[FaceObs],
     else:
         txt(x2, 52, "head  -- no 3-D fix --", (120, 120, 200))
 
-    attending = obs is not None and Channels.attending(obs)
+    attending = obs is not None and ch.attending
     txt(x2, 104, f"dwell {ch.dwell:5.1f}s",
         (120, 230, 140) if attending else (140, 140, 140))
     txt(x2 + 130, 104, "ATTENDING" if attending else

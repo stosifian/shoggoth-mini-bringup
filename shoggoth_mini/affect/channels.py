@@ -34,6 +34,11 @@ class Channels:
         self.pos: Optional[np.ndarray] = None
         self.arousal = self.valence = 0.0
         self.dwell = 0.0            # s of continuous attended presence
+        # The Schmitt latch for attending(). It lives here because Channels is
+        # already the per-session stateful object, and because a latch shared
+        # by the orchestrator, the CSV column and the on-screen readout is the
+        # only way those three can agree about a boundary case.
+        self.attending = False
         self.absent = 0.0           # s since the face was last seen
         self.approach = 0.0         # m/s, + = coming closer
         self.change = 0.0           # rate of expression change
@@ -54,6 +59,8 @@ class Channels:
             self.absent += dt
             if self.absent > 0.5:       # brief dropouts are detector noise,
                 self.dwell = 0.0        # not the person leaving
+                self.attending = False  # and drop the latch, so returning has
+                                        # to earn attention at the entry gate
             return
         self.absent = 0.0
 
@@ -76,11 +83,8 @@ class Channels:
                     self.approach, (self._prev_dist - d) / dt, 0.2)
             self._prev_dist = d
 
-        self.dwell = self.dwell + dt if self.attending(obs) else 0.0
-
-    @staticmethod
-    def attending(obs) -> bool:
-        return attending(obs.yaw, obs.pitch)
+        self.attending = attending(obs.yaw, obs.pitch, self.attending)
+        self.dwell = self.dwell + dt if self.attending else 0.0
 
     @property
     def distance(self) -> Optional[float]:
