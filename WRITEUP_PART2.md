@@ -179,7 +179,7 @@ The motion design was the most playful part of the project. While I carried over
 Given for these states, there either is no user or the user is just starting to be perceived, I opted for a sort of breathing mimetic, with the tentacle going in and out of an arched shape. For ALONE, I opted for a slower breathing pattern to convey that shoggoth is at rest
 
 <p align="center">
-  <img src="media/breathe_plot.png" width="600" alt="System diagram for the finger tracking path">
+  <img src="media/breathe_plot.png" width="700" alt="System diagram for the finger tracking path">
   <br>
   <em>Time vs motor position plot of "breathe" and "slow_breathe"</em>
 </p>
@@ -188,7 +188,7 @@ Given for these states, there either is no user or the user is just starting to 
 This is the closest analog to the "idle" motion primitive Mattheiu had specified in the original project. In my experience, the randomness of "idle" made it a bit difficult to infer what the "state" was at times. With that, I opted for a deterministic and repeatable motion to convey a sort of "loading" intent, which NEUTRAL represents in my opinion. For that, I opted going with a circle of growing radius (linearly ramped up and down), essentially a spiral over time. 
 
 <p align="center">
-  <img src="media/slow_circle_plot.png" width="600" alt="System diagram for the finger tracking path">
+  <img src="media/slow_circle_plot.png" width="700" alt="System diagram for the finger tracking path">
   <br>
   <em>Time vs motor position plot of "slow_circle"</em>
 </p>
@@ -197,15 +197,21 @@ This is the closest analog to the "idle" motion primitive Mattheiu had specified
 3) CONTENT + EXCITED: "side_side", "side_side_fast"
 My biggest inspiration for this was essentially a happy dog waving her tail side to side. However, prototyping that on Shoggoth didn't have the same effect, so I opted for some more dynamics. Thinking of game and movie animation, I opted to add a little 'stutter-step' at the end of the cycle (i.e. when the tentacle is at max deflection). This mathematically takes the form of not a sinusoid, but a piecewise raised-cosine interpolation through a list of fractional targets. So instead of just sweeping between the two extremes and turning around, it overshoots its own turn. At each side it pulls back about 30%, then drives 20% past where it just was, and only then heads across to the other side. Every leg uses the same easing — frac = cur + (target − cur) · (1 − cos(π·i/n)) / 2 — which means it's always at zero velocity when it arrives and when it leaves, so none of the joins snap. The timing is the trick: those two little beats run 2–3× faster than the sweep, and that change in speed is what your eye actually picks up. For EXCITED, this same motion profile is sped up to convey the 'elevated' level of contentment :)
 
+<p align="center">
+  <img src="media/side_plot.png" width="700" alt="System diagram for the finger tracking path">
+  <br>
+  <em>Time vs motor position plot of "side_side" and "side_side_fast"</em>
+</p>
+
 
 
 4) SAD + ANGRY: "arched"
 Again, inspiration for this was a dog having his tail between his legs. I deliberately made the motion for SAD and ANGRY to be the same because I found those two emotions to be the most unreliable and usually was trigged by the same time of frowning. So this choice more of a band-aid partially than a creative direction. That being said, I do feel making Shoggoth come across as ANGRY is quite a challenge given its endearing form factor, and the only options I felt were viable would make the tentacle exhibit dynamics that could potentially self-harm Shoggoth, so for now that's been opted out. Additionally, for the ultimate goal of the having Shoggoth be a true interactive partner, I don't believe having an angry primitive is a beneficial design goal (AI alignment and all that). The 'arched' motion primitive itself is quite simple: just a linear ramp to a fixed offset (currently at 700 ticks).
 
 <p align="center">
-  <img src="media/arched_plot.png" width="600" alt="System diagram for the finger tracking path">
+  <img src="media/arched_plot.png" width="700" alt="System diagram for the finger tracking path">
   <br>
-  <em>Time vs motor position plot of "slow_circle"</em>
+  <em>Time vs motor position plot of "arched"</em>
 </p>
 
 
@@ -214,7 +220,21 @@ Again, inspiration for this was a dog having his tail between his legs. I delibe
 5) YES + NO: "yes", "no"
 The motion primitives have been largely borrowed from the original project (I did slow down "no" to match the motor slew rate). What's different is I've coupled the motion with a sound that plays. As you can imagine, this concept can be further extended to other states but "yes" and "no" were the most straightforward given that they have a specified duration of motion that you can match the audio up with. 
 
+<p align="center">
+  <img src="media/yes_no_plot.png" width="700" alt="System diagram for the finger tracking path">
+  <br>
+  <em>Time vs motor position plot of "yes", "no"</em>
+</p>
+
 As for how I came up with the audio: I went fully overboard and vibe-coded a FM + AM synthesizer plug in where you coud 'hand-draw' (via computer trackpad) the period of the profile of the frequency modulation and amplitude modulation over a specified time duration and then specify the range, offset, etc. of the modulation via knobs on the interface. I looked toward Star Wars droid sounds for inspiration here (R2-D2 mostly) and generally the school of though is going from high to low pitch is a negative association, so I went with that modulation for "no" and conversely, low to high pitch is a positive, affirmative one, so went with that for "yes".
+
+<p align="center">
+<img src="media/contour_demo.gif" width="700" alt="Open-Loop Sweep, Before (left) vs After (right) retensioning">
+  <br>
+  <em>Recreation on how I created the "yes" and "no" sounds</em>
+</p>
+
+
 
 (give of example of the plug-in)
 
