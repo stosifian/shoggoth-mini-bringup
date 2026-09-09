@@ -138,6 +138,33 @@ def circumplex():
     save(fig, "circumplex")
 
 
+def bandpass():
+    """A passband with rejected shoulders: the 0.8-4 Hz rate test.
+
+    Honest about what it abstracts. Nothing is actually FILTERED -- the
+    hysteretic half-cycle rate is computed and compared against the band, so
+    no signal passes through anything. But "only oscillation in this band
+    counts as a gesture" is what the stage means, and the passband glyph says
+    that in one shape. Drawn with hard shoulders rather than a smooth
+    roll-off, since the test is a comparison and not a filter response: a
+    gentle skirt would imply an attenuation that does not exist.
+    """
+    fig, ax = canvas()
+    lo, hi = -0.42, 0.42
+    ax.axhline(0, color="#bbb", lw=1.1)
+    ax.plot([-1.05, lo], [-0.62, -0.62], color=INK, lw=LW, solid_capstyle="round")
+    ax.plot([lo, lo], [-0.62, 0.55], color=INK, lw=LW, solid_capstyle="round")
+    ax.plot([lo, hi], [0.55, 0.55], color=INK, lw=LW + 2.2, solid_capstyle="round")
+    ax.plot([hi, hi], [0.55, -0.62], color=INK, lw=LW, solid_capstyle="round")
+    ax.plot([hi, 1.05], [-0.62, -0.62], color=INK, lw=LW, solid_capstyle="round")
+    # the band edges are the whole content, so mark them
+    for x in (lo, hi):
+        ax.plot([x, x], [-0.86, -0.72], color=INK, lw=1.6,
+                solid_capstyle="round")
+    ax.set_xlim(-1.15, 1.15); ax.set_ylim(-1.0, 1.0)
+    save(fig, "bandpass")
+
+
 def quantised():
     """A staircase against a smooth ramp: the ROI size rule."""
     fig, ax = canvas()
@@ -153,6 +180,7 @@ ICONS = [
     ("deadband", "deadband", "output ignores small input"),
     ("baseline", "baseline subtraction", "signal minus its slow median"),
     ("circumplex", "circumplex + neutral", "quadrants, with a dead disc"),
+    ("bandpass", "passband", "only 0.8-4 Hz counts as a gesture"),
     ("quantised", "quantised", "snaps to a grid, ignores wobble"),
 ]
 
@@ -171,7 +199,7 @@ def sheet(dpi: int = 300):
     sizes = [1.0, 0.42, 0.26]           # full, ~64 px, ~40 px in a diagram
     labels = ["full size", "at 64 px", "at 40 px"]
     n = len(ICONS)
-    fig = plt.figure(figsize=(2.35 * n, 5.6), dpi=dpi)
+    fig = plt.figure(figsize=(2.15 * n, 5.6), dpi=dpi)
     fig.patch.set_facecolor("white")
 
     for j, (name, title, blurb) in enumerate(ICONS):
@@ -179,10 +207,10 @@ def sheet(dpi: int = 300):
         for i, (s, lab) in enumerate(zip(sizes, labels)):
             # place by hand so the small versions are genuinely smaller rather
             # than a full-size image squeezed into a smaller axes box
-            w = 0.155 * s
+            w = 0.132 * s
             x = (j + 0.5) / n - w / 2
             y = 0.62 - i * 0.245 - w / 2
-            ax = fig.add_axes([x, y, w, w * (2.35 * n) / 5.6])
+            ax = fig.add_axes([x, y, w, w * (2.15 * n) / 5.6])
             ax.imshow(img)
             ax.set_axis_off()
             if j == 0:
@@ -216,5 +244,5 @@ if __name__ == "__main__":
     if a.colour:
         ACCENT, QUADS = COLOUR_ACCENT, COLOUR_QUADS
     print(f"writing icons -> {OUT}  ({DPI} dpi)")
-    schmitt(); deadband(); baseline(); circumplex(); quantised()
+    schmitt(); deadband(); baseline(); circumplex(); bandpass(); quantised()
     sheet(a.sheet_dpi)
