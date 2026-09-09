@@ -51,7 +51,11 @@ def main() -> int:
         ("slow_breathe", SLOW_BREATHE_CONFIG.period_s, "ALONE"),
     ]
     data = {n: capture(n) for n, _, _ in runs}
-    span = max(t[-1] for t, _ in data.values())
+    # Clip to the SHORTER run, not the longer one. Showing all 23.7 s leaves
+    # the top panel empty past 12 s, and empty space is not evidence -- the
+    # comparison is a rate, so the strongest frame is the window where both are
+    # running and the reader counts 6 cycles against 3.
+    span = min(t[-1] for t, _ in data.values())
 
     fig, axes = plt.subplots(2, 1, figsize=(12, 6.0), sharex=True, sharey=True)
     fig.patch.set_facecolor("white")
@@ -72,10 +76,13 @@ def main() -> int:
         ax.text(period / 2, y + 28, f"{period:.0f} s", color="#c2185b",
                 ha="center", fontsize=10, weight="bold")
 
-        cycles = t[-1] / period
-        ax.set_title(f"{name}   —   {state}   —   period {period:.0f} s, "
-                     f"{cycles:.0f} cycles in {t[-1]:.1f} s   "
-                     f"({len(t)} commands)", loc="left", fontsize=11)
+        # round, not int: the window holds 5.95 periods, and flooring that to
+        # "5 cycles" contradicts the six the reader can plainly count.
+        shown = round(span / period)
+        ax.set_title(f"{name}   —   {state}   —   period {period:.0f} s   →   "
+                     f"{shown} cycles in the {span:.0f} s window "
+                     f"(full run {t[-1]:.1f} s, {len(t)} commands)",
+                     loc="left", fontsize=11)
         ax.set_ylabel("motor position (ticks)")
         ax.grid(alpha=0.18)
         ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
