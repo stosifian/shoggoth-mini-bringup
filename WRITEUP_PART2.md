@@ -16,6 +16,8 @@
      "explore expressive motions (likely going beyond the 2D projection), add
      non-human sound, and potentially additional layers of perception." -->
 
+Shoggoth-Mirror is a second-iteration on the original Shoggoth project, where now via the camera it perceives the user's face and mirrors the perceived state of the user back through movement of its tentacle
+
 ---
 
 ## Why a mirror
@@ -32,9 +34,14 @@
      The tentacle-with-no-face angle is the interesting constraint, not a
      limitation: if affect reads at all here it reads through movement alone. -->
 
+Given that I'm working toward making Shoggoth a fully-interactive multi-modal 'device', my goal was to first have Shoggoth act as 'mirror' to the user. Perceiving the user's state of course is a fundamental part to human-robot interaction, so I figured having this first step would be 1) useful to debug how perception translates into conception of a user's 'state' and 2) a good springboard to explore a larger space of motions as well as including sound to develop better intuition how to make Shoggoth appear "lifelike", even as a mirror.
+
+I looked to the ELEGNT paper as some inspiration for this phase. The authors split expressive momvement into four categories: intention, attention, attitude, and emotion. With this mirror phase, the emphasis is on attention and emotion. Attention of course in perceiving the user and deducing a state and emotion in trying to play back that that perceived state in an expressive enough motion that the user can intuit an 'emotional' state from Shoggoth. Given that Shoggoth's only form of expression is tentacle movement and sound, it's an interesting constraint. 
+
+
 ---
 
-## The design lives in a spreadsheet
+## System Design
 
 <!-- The most distinctive decision in the project and worth its own section.
 
@@ -55,6 +62,26 @@
      The clash map is the figure that earns its place: 62 clashing cells of 310
      collapsed to 0, and the picture showed they were nearly all ONE over-broad
      row rather than twenty separate problems. -->
+
+(insert diagram)
+
+The overall system flow for Shoggoth-Mirror can be best encapsulated at a high-level in the diagram above. Overall, the camera feed drives the perception. A variety of machine learning models under the MediaPipe framework from Google extract features like facial presence, pose, and blendshape (facial and eye movements). Those artifacts are fed into a variety of detection schema for inferring input states that go into the state machine. At the moment broken down into, the following inputs are: attention (is user facing Shoggoth), head gesture (did user nod 'yes' or shake 'no'), and Emotion (inferred from arousal and valence values).
+
+These states are then fed into the state machine, which determines the overall state of the user that Shoggoth will mirror and then plays that state back via MotionWorker (which essentially carries the motion primitive and vocalization to be played based on the state). The state machine architecture is defined by state tables that I defined (4 tables overall, in shoggoth-mirror-state folder) which are parsed and then implemented in `affect/fsm.py`. See the transition definitions table below:
+
+(insert table)
+
+
+The parser converts the definitions laid out in the tables into executable transitions: each row's condition becomes a list of Terms, its hold time a float, and "Any except ALONE" an explicit list of source states. Nothing restates the table in code, so the checker, the generated diagram and Shoggoth are all reading the same 9 states and 16 rows.
+
+Some insight behind some of the decisions:
+
+1) For "Yes" and "No" detection, I set that as priority 1 as it should override any current state to communicate the fact that it acknowledges/mirrors the user's shaking/nodding.
+
+2) Transitioning to ALONE when face is not present: this should override any previously registered emotion state
+
+3) Transition to NOTICING: similar with 2), this should override any previously registered emotion state once attention is lost
+
 
 ---
 
@@ -172,6 +199,7 @@
      - No fast abort. Ctrl+C is graceful, not an emergency stop.
      - grab and the arch sit closest to the encoder range; the margin shrinks on
        its own with every retension. -->
+     - Big takeaway would be tune to optimnize hand-tuning of arousal/valence
 
 ---
 
