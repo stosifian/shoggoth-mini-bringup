@@ -165,6 +165,34 @@ def bandpass():
     save(fig, "bandpass")
 
 
+def clip():
+    """Saturation: a steep linear region running into hard rails at +/-1.
+
+    The dual of the deadband glyph -- that one is flat in the middle, this one
+    is flat at the ends -- so the pair reads as a set.
+
+    The slope is drawn STEEP on purpose, hitting the rail at about a third of
+    the input range, because that is the honest shape of this stage. The gain
+    is 3.0 against inputs that are already normalised, so a broad smile
+    (mouthSmile ~0.9) reaches valence +1.00 exactly and every stronger
+    expression maps to the same value. Drawing a gentle 45-degree slope would
+    show a clip that almost never fires; this one fires constantly, and the
+    rails are weighted to say so.
+    """
+    fig, ax = canvas()
+    k = 3.0
+    x = np.linspace(-1, 1, 400)
+    y = np.clip(k * x, -1, 1)
+    ax.axhline(0, color="#bbb", lw=1.1)
+    ax.axvline(0, color="#bbb", lw=1.1)
+    ax.plot(x, y, color=INK, lw=LW, solid_capstyle="round")
+    for s in (1, -1):                      # the rails are the content
+        ax.plot([s / k, s * 1.0], [s, s], color=ACCENT, lw=LW + 2.2,
+                solid_capstyle="round")
+    ax.set_xlim(-1.1, 1.1); ax.set_ylim(-1.25, 1.25)
+    save(fig, "clip")
+
+
 def quantised():
     """A staircase against a smooth ramp: the ROI size rule."""
     fig, ax = canvas()
@@ -181,6 +209,7 @@ ICONS = [
     ("baseline", "baseline subtraction", "signal minus its slow median"),
     ("circumplex", "circumplex + neutral", "quadrants, with a dead disc"),
     ("bandpass", "passband", "only 0.8-4 Hz counts as a gesture"),
+    ("clip", "clip / saturation", "gain 3.0 into hard rails at +/-1"),
     ("quantised", "quantised", "snaps to a grid, ignores wobble"),
 ]
 
@@ -199,7 +228,7 @@ def sheet(dpi: int = 300):
     sizes = [1.0, 0.42, 0.26]           # full, ~64 px, ~40 px in a diagram
     labels = ["full size", "at 64 px", "at 40 px"]
     n = len(ICONS)
-    fig = plt.figure(figsize=(2.15 * n, 5.6), dpi=dpi)
+    fig = plt.figure(figsize=(2.0 * n, 5.6), dpi=dpi)
     fig.patch.set_facecolor("white")
 
     for j, (name, title, blurb) in enumerate(ICONS):
@@ -207,10 +236,10 @@ def sheet(dpi: int = 300):
         for i, (s, lab) in enumerate(zip(sizes, labels)):
             # place by hand so the small versions are genuinely smaller rather
             # than a full-size image squeezed into a smaller axes box
-            w = 0.132 * s
+            w = 0.116 * s
             x = (j + 0.5) / n - w / 2
             y = 0.62 - i * 0.245 - w / 2
-            ax = fig.add_axes([x, y, w, w * (2.15 * n) / 5.6])
+            ax = fig.add_axes([x, y, w, w * (2.0 * n) / 5.6])
             ax.imshow(img)
             ax.set_axis_off()
             if j == 0:
@@ -244,5 +273,5 @@ if __name__ == "__main__":
     if a.colour:
         ACCENT, QUADS = COLOUR_ACCENT, COLOUR_QUADS
     print(f"writing icons -> {OUT}  ({DPI} dpi)")
-    schmitt(); deadband(); baseline(); circumplex(); bandpass(); quantised()
+    schmitt(); deadband(); baseline(); circumplex(); bandpass(); clip(); quantised()
     sheet(a.sheet_dpi)
