@@ -11,7 +11,11 @@
 > physical unit, a redesigned dome, stereo calibration fixes, and a measured
 > characterisation of the Feetech STS3215 servos that corrected several wrong
 > assumptions — including one that had been destroying tendons. The
-> characterisation harness is in [`tools/`](tools/).
+> characterisation harness is in [`tools/`](tools/). Part 2,
+> [Shoggoth Mirror](WRITEUP_PART2.md), adds a perception and behaviour
+> layer on top of that: face tracking, an affect estimate, a state
+> machine defined in spreadsheets, and a motion vocabulary to play it
+> back.
 >
 > **To install and run the robot**, see the original project's README, kept here
 > as [UPSTREAM_README.md](UPSTREAM_README.md).
@@ -19,6 +23,10 @@
 ---
 
 # Building Shoggoth Mini — Part 1: Getting It Working
+
+> **Part 2 is here: [Shoggoth Mirror](WRITEUP_PART2.md)** — the robot now
+> watches your face and mirrors the state it reads back through movement
+> and sound.
 
 ---
 
