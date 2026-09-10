@@ -192,6 +192,25 @@ ALONE plays slow_breathe, which is about 24 seconds long. The worker checked for
 
 The fix was to have the primitives now check a flag between command points and bail out early. That took the reaction time from ~24 s down to about half a second. The bit that mattered more than I expected was the eased exit. If you just stop mid-motion, the tentacle is left wherever it happened to be, and the reset back to neutral then snaps it home at whatever rate the servos can manage. This doesn’t look great and was one of the areas I felt made orchestrate from Part 1 feel a bit off. So the interrupt eases to neutral over 0.3 s first, then hands over.
 
+<p align="center">
+<img src="media/noticing.gif" width="700" alt="Shoggoth transitioning from being alone to noticing me">
+  <br>
+  <em>Shoggoth transitioning from being alone to noticing me</em>
+</p>
+
+<p align="center">
+<img src="media/no.gif" width="700" alt="Shoggoth mirroring No back to me">
+  <br>
+  <em>Shoggoth mirroring No back to me</em>
+</p>
+
+<p align="center">
+<img src="media/yes.gif" width="700" alt="Shoggoth mirroring Yes back to me">
+  <br>
+  <em>Shoggoth mirroring Yes back to me</em>
+</p>
+
+
 ---
 
 ## On verification
