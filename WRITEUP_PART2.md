@@ -195,9 +195,9 @@ The fix was to have the primitives now check a flag between command points and b
 </p>
 
 <p align="center">
-<img src="media/yes.gif" width="700" alt="Shoggoth mirroring Yes back to me">
+<img src="media/yes.gif" width="700" alt="Shoggoth mirroring Yes back to me (forgive my bad impression of a Sea World Seal)">
   <br>
-  <em>Shoggoth mirroring Yes back to me</em>
+  <em>Shoggoth mirroring Yes back to me (forgive my bad impression of a Sea World Seal)</em>
 </p>
 
 
