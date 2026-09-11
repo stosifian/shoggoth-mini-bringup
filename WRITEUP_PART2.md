@@ -6,7 +6,7 @@
 ## Introduction
 
 
-Shoggoth-Mirror is a second-iteration on the original Shoggoth project, where now via the camera it perceives the user's face and mirrors the perceived state of the user back through movement of its tentacle.
+Shoggoth-Mirror is a second-iteration on the original Shoggoth-Mini project (see Part 1: [Getting It Working](README.md)), where now via the camera it perceives the user's face and mirrors the perceived state of the user back through movement of its tentacle.
 
 https://github.com/user-attachments/assets/29a01006-a96b-4f6e-93fa-270ad1ab9489
 
@@ -15,7 +15,7 @@ https://github.com/user-attachments/assets/29a01006-a96b-4f6e-93fa-270ad1ab9489
 ## Why a mirror
 
 
-Given that I'm working toward making Shoggoth a fully-interactive multi-modal 'device', my goal was to first have Shoggoth act as 'mirror' to the user. Perceiving the user's state of course is a fundamental part to human-robot interaction, so I figured having this first step would be 1) useful to debug how perception translates into conception of a user's 'state' and 2) a good springboard to explore a larger space of motions as well as including sound to develop better intuition how to make Shoggoth appear "lifelike", even as a mirror.
+Given that I'm working toward making Shoggoth a fully-interactive multi-modal 'device', my goal was to first have Shoggoth act as mirror to the user. Perceiving the user's state of course is a fundamental part to human-robot interaction, so I figured having this first step would be 1) useful to debug how perception translates into conception of a user's 'state' and 2) a good springboard to explore a larger space of motions as well as including sound to develop better intuition how to make Shoggoth appear "lifelike", even as a mirror.
 
 I looked to the ELEGNT paper as some inspiration for this phase. The authors split expressive movement into four categories: intention, attention, attitude, and emotion. With this mirror phase, the emphasis is on attention and emotion. Attention of course in perceiving the user and deducing a state and emotion in trying to play back that perceived state in an expressive enough motion that the user can intuit an 'emotional' state from Shoggoth. Given that Shoggoth's only form of expression is tentacle movement and sound, it's an interesting constraint.
 
