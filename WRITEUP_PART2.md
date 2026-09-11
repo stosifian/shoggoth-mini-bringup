@@ -95,7 +95,7 @@ This part of the pipeline is absolutely the most fragile part. Inferring emotion
 
 
 
-The motion design was the most playful part of the project. While I carried over a few of the primitives from the original Shoggoth project ("yes", "no"), I wanted to add some more that I felt mimed emotional state in a more efficient way for a device where the only movable body is a pseudo-3 DoF tentacle. I'd cite my main sources of information from popular animation such as Disney/Pixar movies, Pokemon (games and anime), as well as animal behavior, primarily dogs and monkeys, who are quite communicative using their tails (a similar appendage). Onto the primitives:
+The motion design was the most playful part of the project. While I carried over a few of the primitives from the original Shoggoth project ("yes", "no"), I wanted to add some more that I felt mimed emotional state in a more efficient way for a device where the only movable body is a pseudo-3 DoF tentacle. I'd cite my main sources of inspiration from popular animation such as Disney/Pixar movies, Pokemon (games and anime), as well as animal behavior, primarily dogs, who are quite communicative using their tails (a similar appendage). Onto the primitives:
 
 1) ALONE / NOTICING: "slow_breathe", "normal_breathe"
 
@@ -217,20 +217,20 @@ The catch is that a golden test only pins down behaviour, not correctness. If no
 ## Open Issues
 
 
-The biggest one by far is the arousal/valence weighting, which is still just hand-picked 16 numbers. Arousal especially is the weak axis, since every weight in it only ever adds to a neutral face, so it basically never goes negative and saturates well before you've run out of expression, which is a big part of why SAD and ANGRY sit so close together. On the motion side, transitions between states still cut rather than blend: CONTENT to EXCITED is literally the same shape at two settings and could be made continuous, but right now it just stops one primitive and starts the other. And a few smaller ones I'm aware of: the head pose signs were never actually verified against the rig, there's no fast abort (Ctrl+C is graceful, not an emergency stop), and the arch sits close enough to the encoder range that the margin shrinks a little every time I re-tension.
+The biggest one by far is the arousal/valence weighting, which is still just 16 hand-picked numbers. Arousal especially is the weak axis, since every weight in it only ever adds to a neutral face, so it basically never goes negative and saturates well before you've run out of expression, which is a big part of why SAD and ANGRY sit so close together. On the motion side, transitions between states still cut rather than blend: CONTENT to EXCITED is literally the same shape at two settings and could be made continuous, but right now it just stops one primitive and starts the other. And a few smaller ones I'm aware of: the head pose signs were never actually verified against the rig, there's no fast abort (Ctrl+C is graceful, not an emergency stop), and the arch sits close enough to the encoder range that the margin shrinks a little every time I re-tension.
 
 
 ---
 
 ## A note on AI-assisted development
 
-Almost all of the code this phase was written with Claude Code. I'd work out the architecture, the design choices and the debug path, and hand off the implementation. A genuine change was with tooling, since building a checker or a plotting harness used to be something I'd skip because it wasn't the "real" project and now it's cheap enough that I'll build the thing that checks the thing almost by reflex.
+Almost all of the code this phase was written with Claude Code. I'd work out the architecture, the design choices and the debug path, and hand off the implementation. The biggest help here using AI-coding was with tooling, since building a checker or a plotting debugger used to be something I'd skip because it wasn't the "real" project and more grunt-work (though very important work for a system that you'd want to ultimately validate) and now it's cheap enough that I'll build the thing that checks the thing almost by reflex.
 
 ---
 
 ## What's next
 
-The immediate thing I'm working on is making the motion continuous across state transitions, starting with CONTENT to EXCITED since those are two settings of the same shape and should be able to just morph rather than stop and restart. The endpoint I'm aiming for is a motion layer where a state sets targets for amplitude, frequency and character and the motion drifts toward them, instead of picking from a menu of primitives, which is the architecture the whole affect/state split has been pointing at from the start. I am also scoping the voice path (the greyed out part of the diagram), both as an input to make the emotional read less fragile and as an output so Shoggoth has something more than "yes" and "no" to say and while also harmonious with the motions performed. Similar to Matthieu's original but with Voice input working in tandem with the visual perception layer. Longer term that's the actual goal here: a genuinely interactive partner rather than a mirror.
+The immediate thing I'm working on is making the motion continuous across state transitions, starting with CONTENT to EXCITED since those are two settings of the same shape and should be able to just morph rather than stop and restart. The endpoint I'm aiming for is a motion layer where a state sets targets for amplitude, frequency and character and the motion drifts toward them, instead of picking from a menu of primitives, which is the architecture the whole affect/state split has been pointing at from the start. I am also scoping the voice path (the greyed out part of the diagram), both as an input to make the emotional read less fragile and as an output so Shoggoth has something more than "yes" and "no" to say while also harmonious with the motions performed. Similar to Matthieu's original but with Voice input working in tandem with the visual perception layer. Longer term that's the actual goal here: a genuinely interactive partner rather than a mirror.
 
 ---
 
